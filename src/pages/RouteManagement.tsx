@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   Plus, Search, Edit2, Trash2, X, Route as RouteIcon, MapPin, Clock, GripVertical, PlusCircle, MinusCircle } from 'lucide-react'
 import { api } from '@/utils/api'
-import { formatDateTime, formatDuration } from '@/utils/format'
+import { formatDateTime, formatDurationMinutes } from '@/utils/format'
 import type { Route, RouteStop } from '@shared/types'
 import clsx from 'clsx'
 
@@ -220,7 +220,7 @@ function RouteManagement() {
                     <td className="table-cell">
                       <div className="flex items-center gap-2">
                         <Clock size={14} className="text-gray-400" />
-                        {formatDuration(getTotalEstimatedTime(route.stops))}
+                        {formatDurationMinutes(getTotalEstimatedTime(route.stops))}
                       </div>
                     </td>
                     <td className="table-cell">{formatDateTime(route.createdAt)}</td>
@@ -402,7 +402,7 @@ function RouteManagement() {
                   <span>共 {formData.stops.length} 个站点</span>
                   <span>
                     预计总时长:{' '}
-                    {formatDuration(getTotalEstimatedTime(
+                    {formatDurationMinutes(getTotalEstimatedTime(
                       formData.stops.map((s, i) => ({ ...s, order: i + 1 }))
                     ))}
                   </span>

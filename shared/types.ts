@@ -155,6 +155,74 @@ export interface DispatchRequest {
   scheduledDepartureTime: string;
 }
 
+export interface DispatchPreviewRequest {
+  orderIds: string[];
+  vehicleId: string;
+  driverId: string;
+  routeId: string;
+  scheduledDepartureTime: string;
+}
+
+export interface DispatchPreviewOrder {
+  id: string;
+  orderNo: string;
+  goodsName: string;
+  quantity: number;
+  weight: number;
+  temperatureZone: TemperatureZone;
+  deliveryAddress: string;
+  customerName?: string;
+}
+
+export interface DispatchPreviewConflict {
+  type: 'vehicle' | 'driver' | 'order' | 'temperature' | 'capacity' | 'time' | 'route';
+  severity: 'error' | 'warning';
+  message: string;
+}
+
+export interface DispatchPreviewSuggestion {
+  type: 'alternative_vehicle' | 'alternative_driver' | 'split_batch' | 'adjust_time' | 'change_route';
+  priority: number;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface DispatchPreviewResult {
+  canDispatch: boolean;
+  totalWeight: number;
+  totalQuantity: number;
+  temperatureZones: TemperatureZone[];
+  estimatedDurationMinutes: number;
+  estimatedArrivalTime: string;
+  vehicleCapacityUsed: number;
+  vehicleCapacityPercent: number;
+  conflicts: DispatchPreviewConflict[];
+  suggestions: DispatchPreviewSuggestion[];
+  orders: DispatchPreviewOrder[];
+  vehicle: {
+    id: string;
+    plateNo: string;
+    vehicleType: string;
+    capacity: number;
+    temperatureZones: TemperatureZone[];
+    availableStartTime: string;
+    availableEndTime: string;
+  } | null;
+  driver: {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+  } | null;
+  route: {
+    id: string;
+    name: string;
+    stopCount: number;
+  } | null;
+  scheduledDepartureTime: string;
+  warnings: string[];
+}
+
 export interface NodeUpdateRequest {
   status: 'completed' | 'exception';
   locationText: string;

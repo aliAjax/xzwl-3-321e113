@@ -15,6 +15,11 @@ import type {
   TemperatureZone,
   DispatchMatchResult,
   DispatchRequest,
+  DispatchPreviewRequest,
+  DispatchPreviewResult,
+  DispatchPreviewConflict,
+  DispatchPreviewSuggestion,
+  DispatchPreviewOrder,
 } from '../../shared/types';
 
 function generateBatchNo(): string {
@@ -398,62 +403,292 @@ export const dispatchService = {
     return { batch, tasks };
   },
 
-  getDispatchPreview(request: DispatchRequest): {
-    batch: LoadingBatch;
-    tasks: DeliveryTask[];
-    totalWeight: number;
-    totalQuantity: number;
-    estimatedDuration: number;
-  } {
-    const validation = this.validateDispatchRequest(request);
-    if (!validation.valid) {
-      throw new Error(`调度验证失败：${validation.errors.join('; ')}`);
-    }
+  previewDispatch(request: DispatchPreviewRequest): DispatchPreviewResult {
+    const conflicts: DispatchPreviewConflict[] = [];
+    const suggestions: DispatchPreviewSuggestion[] = [];
+    const warnings: string[] = [];
+    let canDispatch = true;
 
     const orders = request.orderIds
-      .map(id => orderRepository.findById(id))
+      .map(id => orderRepository.findByIdWithCustomer(id))
       .filter((o): o is Order => o !== undefined);
+
+    const invalidOrderIds = request.orderIds.filter(
+      id => !orders.find(o => o.id === id)
+    );
+    if (invalidOrderIds.length > 0) {
+      conflicts.push({
+        type: 'order',
+        severity: 'error',
+        message: `以下订单不存在：${invalidOrderIds.join(', ')}`,
+      });
+      canDispatch = false;
+    }
+
+    const invalidStatusOrders = orders.filter(
+      o => !['created', 'warehoused'].includes(o.status)
+    );
+    if (invalidStatusOrders.length > 0) {
+      conflicts.push({
+        type: 'order',
+        severity: 'error',
+        message: `以下订单状态不正确，需要为 created 或 warehoused：${invalidStatusOrders.map(o => o.orderNo).join(', ')}`,
+      });
+      canDispatch = false;
+    }
+
+    const vehicle = vehicleRepository.findById(request.vehicleId);
+    if (!vehicle) {
+      conflicts.push({
+        type: 'vehicle',
+        severity: 'error',
+        message: '车辆不存在',
+      });
+      canDispatch = false;
+    } else {
+      if (vehicle.id === WAREHOUSE_VEHICLE_ID) {
+        conflicts.push({
+          type: 'vehicle',
+          severity: 'error',
+          message: '不能使用入仓专用车辆进行正式调度',
+        });
+        canDispatch = false;
+      }
+      if (vehicle.status !== 'active') {
+        conflicts.push({
+          type: 'vehicle',
+          severity: 'error',
+          message: `车辆状态为 ${vehicle.status}，不可调度`,
+        });
+        canDispatch = false;
+      }
+
+      const requiredZones = [...new Set(orders.map(o => o.temperatureZone))];
+      if (!this.checkTemperatureMatch(vehicle, requiredZones)) {
+        conflicts.push({
+          type: 'temperature',
+          severity: 'error',
+          message: `车辆温区不匹配，需要 ${requiredZones.join(', ')}，车辆只有 ${vehicle.temperatureZones.join(', ')}`,
+        });
+        canDispatch = false;
+
+        const altVehicles = vehicleRepository
+          .findByStatus('active')
+          .filter(v =>
+            v.id !== WAREHOUSE_VEHICLE_ID &&
+            this.checkTemperatureMatch(v, requiredZones)
+          );
+        if (altVehicles.length > 0) {
+          suggestions.push({
+            type: 'alternative_vehicle',
+            priority: 1,
+            message: `推荐以下温区匹配的车辆：${altVehicles.map(v => v.plateNo).join(', ')}`,
+            details: { vehicleIds: altVehicles.map(v => v.id) },
+          });
+        }
+      }
+
+      const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
+      if (vehicle.capacity < totalWeight) {
+        conflicts.push({
+          type: 'capacity',
+          severity: 'error',
+          message: `车辆载重不足，需要 ${totalWeight}kg，车辆容量 ${vehicle.capacity}kg`,
+        });
+        canDispatch = false;
+
+        const largerVehicles = vehicleRepository
+          .findByStatus('active')
+          .filter(v =>
+            v.id !== WAREHOUSE_VEHICLE_ID &&
+            v.capacity >= totalWeight &&
+            this.checkTemperatureMatch(v, requiredZones)
+          );
+        if (largerVehicles.length > 0) {
+          suggestions.push({
+            type: 'alternative_vehicle',
+            priority: 2,
+            message: `推荐以下载重足够的车辆：${largerVehicles.map(v => `${v.plateNo}(${v.capacity}kg)`).join(', ')}`,
+            details: { vehicleIds: largerVehicles.map(v => v.id) },
+          });
+        } else {
+          suggestions.push({
+            type: 'split_batch',
+            priority: 3,
+            message: '建议将订单拆分为多个批次配送',
+          });
+        }
+      }
+
+      if (!this.checkVehicleAvailableTime(vehicle, request.scheduledDepartureTime)) {
+        conflicts.push({
+          type: 'time',
+          severity: 'error',
+          message: `车辆不可用时间：${vehicle.availableStartTime}-${vehicle.availableEndTime}`,
+        });
+        canDispatch = false;
+
+        suggestions.push({
+          type: 'adjust_time',
+          priority: 4,
+          message: `请将发车时间调整至车辆可用时段 ${vehicle.availableStartTime}-${vehicle.availableEndTime} 内`,
+        });
+      }
+
+      const vehicleConflicts = this.checkVehicleTimeConflicts(vehicle.id, request.scheduledDepartureTime);
+      if (vehicleConflicts.length > 0) {
+        vehicleConflicts.forEach(c => {
+          conflicts.push({
+            type: 'vehicle',
+            severity: 'warning',
+            message: c,
+          });
+        });
+        warnings.push(`车辆在 ${new Date(request.scheduledDepartureTime).toDateString()} 已有调度任务`);
+      }
+    }
+
+    const driver = driverRepository.findById(request.driverId);
+    if (!driver) {
+      conflicts.push({
+        type: 'driver',
+        severity: 'error',
+        message: '司机不存在',
+      });
+      canDispatch = false;
+    } else {
+      if (driver.id === WAREHOUSE_DRIVER_ID) {
+        conflicts.push({
+          type: 'driver',
+          severity: 'error',
+          message: '不能使用入仓专用司机进行正式调度',
+        });
+        canDispatch = false;
+      }
+      if (driver.status !== 'on_duty') {
+        conflicts.push({
+          type: 'driver',
+          severity: 'error',
+          message: `司机状态为 ${driver.status}，不可调度`,
+        });
+        canDispatch = false;
+
+        const altDrivers = driverRepository.findByStatus('on_duty').filter(
+          d => d.id !== WAREHOUSE_DRIVER_ID
+        );
+        if (altDrivers.length > 0) {
+          suggestions.push({
+            type: 'alternative_driver',
+            priority: 5,
+            message: `推荐以下在岗司机：${altDrivers.map(d => d.name).join(', ')}`,
+            details: { driverIds: altDrivers.map(d => d.id) },
+          });
+        }
+      }
+
+      const driverConflicts = this.checkDriverTimeConflicts(driver.id, request.scheduledDepartureTime);
+      if (driverConflicts.length > 0) {
+        driverConflicts.forEach(c => {
+          conflicts.push({
+            type: 'driver',
+            severity: 'warning',
+            message: c,
+          });
+        });
+        warnings.push(`司机在 ${new Date(request.scheduledDepartureTime).toDateString()} 已有配送任务`);
+      }
+
+      if (vehicle && vehicle.driverId && vehicle.driverId !== driver.id) {
+        suggestions.push({
+          type: 'alternative_driver',
+          priority: 6,
+          message: `该车辆的固定司机为 ${driverRepository.findById(vehicle.driverId)?.name || '未知'}，建议优先使用固定司机`,
+          details: { driverId: vehicle.driverId },
+        });
+      }
+    }
 
     const route = routeRepository.findById(request.routeId);
     if (!route) {
-      throw new Error('线路不存在');
+      conflicts.push({
+        type: 'route',
+        severity: 'error',
+        message: '线路不存在',
+      });
+      canDispatch = false;
+    } else {
+      const orderAddresses = orders.map(o => o.deliveryAddress);
+      const routeAddresses = route.stops.map(s => s.address);
+      const unmatchedAddresses = orderAddresses.filter(
+        addr => !routeAddresses.some(rAddr => rAddr.includes(addr) || addr.includes(rAddr))
+      );
+      if (unmatchedAddresses.length > 0 && route.stops.length > 0) {
+        warnings.push(`部分订单配送地址可能不在所选线路覆盖范围内：${unmatchedAddresses.slice(0, 3).join(', ')}${unmatchedAddresses.length > 3 ? '...' : ''}`);
+      }
     }
 
     const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
     const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
-    const estimatedDuration = route.stops.reduce((sum, s) => sum + s.estimatedTime, 0);
+    const temperatureZones = [...new Set(orders.map(o => o.temperatureZone))];
+    const estimatedDurationMinutes = route ? route.stops.reduce((sum, s) => sum + s.estimatedTime, 0) : 0;
 
-    const batchNo = generateBatchNo();
-    const batchId = generateId();
-    const now = new Date().toISOString();
+    const departureTime = new Date(request.scheduledDepartureTime);
+    const estimatedArrivalTime = new Date(departureTime.getTime() + estimatedDurationMinutes * 60000).toISOString();
 
-    const batch: LoadingBatch = {
-      id: batchId,
-      batchNo,
-      vehicleId: request.vehicleId,
-      driverId: request.driverId,
-      routeId: request.routeId,
-      orderIds: request.orderIds,
-      status: 'created',
-      createdAt: now,
-    };
+    const vehicleCapacityUsed = totalWeight;
+    const vehicleCapacityPercent = vehicle ? (totalWeight / vehicle.capacity) * 100 : 0;
 
-    const tasks: DeliveryTask[] = orders.map(order => ({
-      id: generateId(),
-      batchId,
-      orderId: order.id,
-      driverId: request.driverId,
-      vehicleId: request.vehicleId,
-      status: 'warehoused',
-      createdAt: now,
+    if (vehicle && vehicleCapacityPercent >= 90 && vehicleCapacityPercent <= 100) {
+      warnings.push(`车辆容量使用率已达 ${vehicleCapacityPercent.toFixed(1)}%，接近满载`);
+    }
+
+    const previewOrders: DispatchPreviewOrder[] = orders.map(order => ({
+      id: order.id,
+      orderNo: order.orderNo,
+      goodsName: order.goodsName,
+      quantity: order.quantity,
+      weight: order.weight,
+      temperatureZone: order.temperatureZone,
+      deliveryAddress: order.deliveryAddress,
+      customerName: order.customer?.name,
     }));
 
+    suggestions.sort((a, b) => a.priority - b.priority);
+
     return {
-      batch,
-      tasks,
+      canDispatch,
       totalWeight,
       totalQuantity,
-      estimatedDuration,
+      temperatureZones,
+      estimatedDurationMinutes,
+      estimatedArrivalTime,
+      vehicleCapacityUsed,
+      vehicleCapacityPercent: Math.round(vehicleCapacityPercent * 10) / 10,
+      conflicts,
+      suggestions,
+      orders: previewOrders,
+      vehicle: vehicle ? {
+        id: vehicle.id,
+        plateNo: vehicle.plateNo,
+        vehicleType: vehicle.vehicleType,
+        capacity: vehicle.capacity,
+        temperatureZones: vehicle.temperatureZones,
+        availableStartTime: vehicle.availableStartTime,
+        availableEndTime: vehicle.availableEndTime,
+      } : null,
+      driver: driver ? {
+        id: driver.id,
+        name: driver.name,
+        phone: driver.phone,
+        status: driver.status,
+      } : null,
+      route: route ? {
+        id: route.id,
+        name: route.name,
+        stopCount: route.stops.length,
+      } : null,
+      scheduledDepartureTime: request.scheduledDepartureTime,
+      warnings,
     };
   },
 

@@ -123,3 +123,16 @@ export function formatDuration(seconds: number): string {
   }
   return `${secs}秒`
 }
+
+export function formatDurationMinutes(minutes: number): string {
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+
+  if (hours > 0 && mins > 0) {
+    return `${hours}小时${mins}分钟`
+  }
+  if (hours > 0) {
+    return `${hours}小时`
+  }
+  return `${mins}分钟`
+}

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { dispatchService } from '../services/dispatch.service';
-import type { DispatchRequest } from '@shared/types';
+import type { DispatchRequest, DispatchPreviewRequest } from '@shared/types';
 
 export const dispatchController = {
   async findMatches(req: Request, res: Response): Promise<Response> {
@@ -16,6 +16,33 @@ export const dispatchController = {
       return res.status(200).json(matches);
     } catch (error) {
       return res.status(500).json({ message: '获取匹配结果失败', error: (error as Error).message });
+    }
+  },
+
+  async preview(req: Request, res: Response): Promise<Response> {
+    try {
+      const request = req.body as DispatchPreviewRequest;
+
+      if (!request.orderIds || request.orderIds.length === 0) {
+        return res.status(400).json({ message: '订单ID列表不能为空' });
+      }
+      if (!request.vehicleId) {
+        return res.status(400).json({ message: '车辆ID不能为空' });
+      }
+      if (!request.driverId) {
+        return res.status(400).json({ message: '司机ID不能为空' });
+      }
+      if (!request.routeId) {
+        return res.status(400).json({ message: '线路ID不能为空' });
+      }
+      if (!request.scheduledDepartureTime) {
+        return res.status(400).json({ message: '预计发车时间不能为空' });
+      }
+
+      const preview = dispatchService.previewDispatch(request);
+      return res.status(200).json(preview);
+    } catch (error) {
+      return res.status(500).json({ message: '调度预演失败', error: (error as Error).message });
     }
   },
 
