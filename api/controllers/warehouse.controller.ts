@@ -62,6 +62,7 @@ export const warehouseController = {
         order: result.order,
         task: result.task,
         node: result.node,
+        batch: result.batch,
       });
     } catch (error) {
       return res.status(400).json({ message: (error as Error).message });

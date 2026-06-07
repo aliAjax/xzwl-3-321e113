@@ -99,10 +99,10 @@ const migrations = [
 
   `CREATE TABLE IF NOT EXISTS delivery_tasks (
     id VARCHAR(36) PRIMARY KEY,
-    batch_id VARCHAR(36) REFERENCES loading_batches(id),
+    batch_id VARCHAR(36) NOT NULL REFERENCES loading_batches(id),
     order_id VARCHAR(36) NOT NULL REFERENCES orders(id),
-    driver_id VARCHAR(36) REFERENCES drivers(id),
-    vehicle_id VARCHAR(36) REFERENCES vehicles(id),
+    driver_id VARCHAR(36) NOT NULL REFERENCES drivers(id),
+    vehicle_id VARCHAR(36) NOT NULL REFERENCES vehicles(id),
     status VARCHAR(20) NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'warehoused', 'loading', 'in_transit', 'delivered', 'completed', 'cancelled')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(order_id)

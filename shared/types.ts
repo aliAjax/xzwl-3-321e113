@@ -104,13 +104,13 @@ export interface DeliveryNode {
 
 export interface DeliveryTask {
   id: string;
-  batchId?: string | null;
+  batchId: string;
   batch?: LoadingBatch;
   orderId: string;
   order?: Order;
-  driverId?: string | null;
+  driverId: string;
   driver?: Driver;
-  vehicleId?: string | null;
+  vehicleId: string;
   vehicle?: Vehicle;
   status: OrderStatus;
   nodes?: DeliveryNode[];

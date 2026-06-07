@@ -302,6 +302,14 @@ export const dispatchService = {
       const existingTask = taskRepository.findByOrderId(order.id);
 
       if (existingTask) {
+        if (existingTask.batchId !== batchId) {
+          batchRepository.removeOrderId(existingTask.batchId, order.id);
+          const oldBatch = batchRepository.findById(existingTask.batchId);
+          if (oldBatch && oldBatch.orderIds.length === 0) {
+            batchRepository.updateStatus(oldBatch.id, 'completed');
+          }
+        }
+
         task = taskRepository.updateTask(existingTask.id, {
           batchId,
           driverId: request.driverId,
