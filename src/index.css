@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f3f4f6;
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-[#2563eb] text-white px-4 py-2 rounded-md hover:bg-[#1d4ed8] transition-colors duration-200 shadow-sm;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-[#1e3a5f] border border-[#1e3a5f] px-4 py-2 rounded-md hover:bg-gray-50 transition-colors duration-200;
+  }
+
+  .btn-danger {
+    @apply bg-[#dc2626] text-white px-4 py-2 rounded-md hover:bg-[#b91c1c] transition-colors duration-200;
+  }
+
+  .btn-success {
+    @apply bg-[#16a34a] text-white px-4 py-2 rounded-md hover:bg-[#15803d] transition-colors duration-200;
+  }
+
+  .card {
+    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+  }
+
+  .input-field {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent;
+  }
+
+  .table-header {
+    @apply bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-6 py-3;
+  }
+
+  .table-cell {
+    @apply px-6 py-4 whitespace-nowrap text-sm text-gray-900;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .temp-zone-frozen {
+    @apply bg-blue-100 text-blue-800;
+  }
+
+  .temp-zone-chilled {
+    @apply bg-cyan-100 text-cyan-800;
+  }
+
+  .temp-zone-ambient {
+    @apply bg-gray-100 text-gray-800;
+  }
+}
