@@ -22,6 +22,9 @@ import type {
   Route,
 } from '../../shared/types';
 
+const WAREHOUSE_VEHICLE_ID = 'veh-warehouse';
+const WAREHOUSE_DRIVER_ID = 'drv-warehouse';
+
 function generateId(): string {
   return uuidv4();
 }
@@ -33,27 +36,24 @@ function generateWarehouseBatchNo(): string {
   return `WH${dateStr}${random}`;
 }
 
-function getDefaultResources(): { vehicle: Vehicle; driver: Driver; route: Route } {
-  const vehicles = vehicleRepository.findAll();
-  const drivers = driverRepository.findAll();
+function getWarehouseResources(): { vehicle: Vehicle; driver: Driver; route: Route } {
+  const vehicle = vehicleRepository.findById(WAREHOUSE_VEHICLE_ID);
+  const driver = driverRepository.findById(WAREHOUSE_DRIVER_ID);
   const routes = routeRepository.findAll();
 
-  const activeVehicle = vehicles.find((v) => v.status === 'active');
-  const onDutyDriver = drivers.find((d) => d.status === 'on_duty');
-
-  if (!activeVehicle) {
-    throw new Error('系统中没有可用的车辆');
+  if (!vehicle) {
+    throw new Error('系统中没有入仓专用车辆，请联系管理员初始化数据');
   }
-  if (!onDutyDriver) {
-    throw new Error('系统中没有可用的司机');
+  if (!driver) {
+    throw new Error('系统中没有入仓专用司机，请联系管理员初始化数据');
   }
   if (routes.length === 0) {
     throw new Error('系统中没有可用的路线');
   }
 
   return {
-    vehicle: activeVehicle,
-    driver: onDutyDriver,
+    vehicle,
+    driver,
     route: routes[0],
   };
 }
@@ -91,7 +91,7 @@ export const warehouseService = {
       throw new Error('该订单已存在配送任务');
     }
 
-    const { vehicle, driver, route } = getDefaultResources();
+    const { vehicle, driver, route } = getWarehouseResources();
 
     const now = new Date().toISOString();
 

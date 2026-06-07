@@ -57,11 +57,13 @@ console.log('✓ 客户数据插入完成');
 insertVehicle.run('veh-001', '京A12345', '冷藏车', '["frozen","chilled","ambient"]', 5000, null, '06:00:00', '22:00:00', 'active');
 insertVehicle.run('veh-002', '京B67890', '冷冻车', '["frozen","chilled"]', 8000, null, '05:00:00', '20:00:00', 'active');
 insertVehicle.run('veh-003', '京C11111', '保温车', '["chilled","ambient"]', 3000, null, '07:00:00', '21:00:00', 'active');
+insertVehicle.run('veh-warehouse', '入仓专用', '虚拟车辆', '["frozen","chilled","ambient"]', 99999, null, '00:00:00', '23:59:59', 'active');
 console.log('✓ 车辆数据插入完成');
 
 insertDriver.run('drv-001', '李师傅', '13700000001', '110101199001011234', 'A2', 'on_duty');
 insertDriver.run('drv-002', '王师傅', '13700000002', '110101199002022345', 'A1', 'on_duty');
 insertDriver.run('drv-003', '张师傅', '13700000003', '110101199003033456', 'A2', 'on_duty');
+insertDriver.run('drv-warehouse', '入仓暂存', '00000000000', '000000000000000000', 'A1', 'on_duty');
 console.log('✓ 司机数据插入完成');
 
 insertRoute.run('route-001', '朝阳线', '东部区域配送', JSON.stringify([

@@ -28,6 +28,9 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+const WAREHOUSE_VEHICLE_ID = 'veh-warehouse';
+const WAREHOUSE_DRIVER_ID = 'drv-warehouse';
+
 export const dispatchService = {
   checkVehicleAvailableTime(vehicle: Vehicle, scheduledTime: string): boolean {
     const scheduled = new Date(scheduledTime);
@@ -52,7 +55,7 @@ export const dispatchService = {
     const scheduledDate = new Date(scheduledTime).toDateString();
 
     const activeBatches = batchRepository.findByVehicleId(vehicleId).filter(b =>
-      ['created', 'loading', 'departed'].includes(b.status)
+      ['created', 'loading', 'departed'].includes(b.status) && b.vehicleId !== WAREHOUSE_VEHICLE_ID
     );
 
     for (const batch of activeBatches) {
@@ -69,7 +72,9 @@ export const dispatchService = {
     const conflicts: string[] = [];
     const scheduledDate = new Date(scheduledTime).toDateString();
 
-    const activeTasks = taskRepository.findActiveTasksByDriverId(driverId);
+    const activeTasks = taskRepository.findActiveTasksByDriverId(driverId).filter(t =>
+      t.driverId !== WAREHOUSE_DRIVER_ID
+    );
 
     for (const task of activeTasks) {
       const taskDate = new Date(task.createdAt).toDateString();
@@ -154,8 +159,12 @@ export const dispatchService = {
     const requiredZones = [...new Set(orders.map(o => o.temperatureZone))];
     const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
 
-    const activeVehicles = vehicleRepository.findByStatus('active');
-    const onDutyDrivers = driverRepository.findByStatus('on_duty');
+    const activeVehicles = vehicleRepository.findByStatus('active').filter(v =>
+      v.id !== WAREHOUSE_VEHICLE_ID
+    );
+    const onDutyDrivers = driverRepository.findByStatus('on_duty').filter(d =>
+      d.id !== WAREHOUSE_DRIVER_ID
+    );
 
     const results: DispatchMatchResult[] = [];
 
@@ -228,6 +237,9 @@ export const dispatchService = {
     if (!vehicle) {
       errors.push('车辆不存在');
     } else {
+      if (vehicle.id === WAREHOUSE_VEHICLE_ID) {
+        errors.push('不能使用入仓专用车辆进行正式调度');
+      }
       if (vehicle.status !== 'active') {
         errors.push(`车辆状态为 ${vehicle.status}，不可调度`);
       }
@@ -254,6 +266,9 @@ export const dispatchService = {
     if (!driver) {
       errors.push('司机不存在');
     } else {
+      if (driver.id === WAREHOUSE_DRIVER_ID) {
+        errors.push('不能使用入仓专用司机进行正式调度');
+      }
       if (driver.status !== 'on_duty') {
         errors.push(`司机状态为 ${driver.status}，不可调度`);
       }
