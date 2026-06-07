@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -19,25 +19,35 @@ import {
   Thermometer,
   AlertTriangle,
   FileSpreadsheet,
+  Smartphone,
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { formatUserRole } from '@/utils/format'
 import clsx from 'clsx'
+import type { UserRole } from '@shared/types'
 
-const menuItems = [
-  { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
-  { path: '/temperature-zone', label: '温区看板', icon: Thermometer },
-  { path: '/temperature-import', label: '温控记录导入', icon: FileSpreadsheet },
-  { path: '/exceptions', label: '异常处理', icon: AlertTriangle },
-  { path: '/orders', label: '订单管理', icon: Package },
-  { path: '/warehouse', label: '入仓登记', icon: Archive },
-  { path: '/dispatch', label: '调度中心', icon: ClipboardList },
-  { path: '/loading', label: '装车管理', icon: Warehouse },
-  { path: '/delivery', label: '配送执行', icon: MapPin },
-  { path: '/vehicles', label: '车辆管理', icon: Truck },
-  { path: '/drivers', label: '司机管理', icon: Users },
-  { path: '/customers', label: '客户管理', icon: Building2 },
-  { path: '/routes', label: '线路管理', icon: RouteIcon },
+interface MenuItem {
+  path: string
+  label: string
+  icon: React.FC<any>
+  roles: UserRole[]
+}
+
+const menuItems: MenuItem[] = [
+  { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard, roles: ['admin', 'dispatcher'] },
+  { path: '/driver-mobile', label: '司机任务台', icon: Smartphone, roles: ['driver'] },
+  { path: '/temperature-zone', label: '温区看板', icon: Thermometer, roles: ['admin', 'dispatcher'] },
+  { path: '/temperature-import', label: '温控记录导入', icon: FileSpreadsheet, roles: ['admin', 'dispatcher'] },
+  { path: '/exceptions', label: '异常处理', icon: AlertTriangle, roles: ['admin', 'dispatcher'] },
+  { path: '/orders', label: '订单管理', icon: Package, roles: ['admin', 'dispatcher'] },
+  { path: '/warehouse', label: '入仓登记', icon: Archive, roles: ['admin', 'dispatcher'] },
+  { path: '/dispatch', label: '调度中心', icon: ClipboardList, roles: ['admin', 'dispatcher'] },
+  { path: '/loading', label: '装车管理', icon: Warehouse, roles: ['admin', 'dispatcher'] },
+  { path: '/delivery', label: '配送执行', icon: MapPin, roles: ['admin', 'dispatcher', 'driver'] },
+  { path: '/vehicles', label: '车辆管理', icon: Truck, roles: ['admin', 'dispatcher'] },
+  { path: '/drivers', label: '司机管理', icon: Users, roles: ['admin', 'dispatcher'] },
+  { path: '/customers', label: '客户管理', icon: Building2, roles: ['admin', 'dispatcher'] },
+  { path: '/routes', label: '线路管理', icon: RouteIcon, roles: ['admin', 'dispatcher'] },
 ]
 
 function Layout() {
@@ -47,12 +57,22 @@ function Layout() {
   const logout = useAuthStore((state) => state.logout)
   const navigate = useNavigate()
 
+  useEffect(() => {
+    if (user?.role === 'driver' && window.location.pathname === '/') {
+      navigate('/driver-mobile', { replace: true })
+    }
+  }, [user, navigate])
+
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
   const roleInfo = user ? formatUserRole(user.role) : null
+
+  const filteredMenuItems = menuItems.filter((item) =>
+    user ? item.roles.includes(user.role) : false
+  )
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -76,7 +96,7 @@ function Layout() {
 
         <nav className="flex-1 py-4 overflow-y-auto">
           <ul className="space-y-1 px-3">
-            {menuItems.map((item) => {
+            {filteredMenuItems.map((item) => {
               const Icon = item.icon
               return (
                 <li key={item.path}>
@@ -106,7 +126,7 @@ function Layout() {
         <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm">
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-semibold text-gray-800">
-              {menuItems.find((m) => window.location.pathname.startsWith(m.path))?.label ||
+              {filteredMenuItems.find((m) => window.location.pathname.startsWith(m.path))?.label ||
                 '冷链配送管理平台'}
             </h2>
           </div>
@@ -136,6 +156,18 @@ function Layout() {
                   <p className="text-sm font-medium text-gray-800">{user?.name}</p>
                   <p className="text-xs text-gray-500">{user?.username}</p>
                 </div>
+                {user?.role === 'driver' && (
+                  <button
+                    onClick={() => {
+                      setUserMenuOpen(false)
+                      navigate('/driver-mobile')
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                  >
+                    <Smartphone size={16} />
+                    司机任务台
+                  </button>
+                )}
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"

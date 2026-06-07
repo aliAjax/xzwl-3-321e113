@@ -22,7 +22,12 @@ function Login() {
 
     try {
       await login(formData)
-      navigate('/dashboard')
+      const user = useAuthStore.getState().user
+      if (user?.role === 'driver') {
+        navigate('/driver-mobile')
+      } else {
+        navigate('/dashboard')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败，请重试')
     } finally {

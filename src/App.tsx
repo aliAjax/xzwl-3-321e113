@@ -15,16 +15,41 @@ import DriverManagement from '@/pages/DriverManagement'
 import CustomerManagement from '@/pages/CustomerManagement'
 import RouteManagement from '@/pages/RouteManagement'
 import ExceptionHandling from '@/pages/ExceptionHandling'
-import TemperatureRecordImport from '@/pages/TemperatureRecordImport';
+import TemperatureRecordImport from '@/pages/TemperatureRecordImport'
+import DriverMobile from '@/pages/DriverMobile'
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   return isAuthenticated ? children : <Navigate to="/login" replace />
+}
+
+function DriverRoute({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((state) => state.user)
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+
+  if (user?.role !== 'driver') {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  return <>{children}</>
 }
 
 function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route
+        path="/driver-mobile"
+        element={
+          <DriverRoute>
+            <DriverMobile />
+          </DriverRoute>
+        }
+      />
       <Route
         path="/"
         element={
