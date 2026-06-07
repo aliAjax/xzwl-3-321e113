@@ -14,12 +14,14 @@ import type {
 } from '../../shared/types';
 
 export const exceptionHandlingService = {
-  async syncExceptions(): Promise<{ synced: number }> {
-    const count = exceptionHandlingRepository.syncExceptionNodes();
-    return { synced: count };
+  async syncExceptions(): Promise<{ total: number; created: number; existing: number; skipped: number }> {
+    const result = exceptionHandlingRepository.syncExceptionNodes();
+    return result;
   },
 
   getExceptionList(params: ExceptionHandlingQueryParams = {}): ExceptionHandlingListResponse {
+    exceptionHandlingRepository.syncExceptionNodes();
+
     const page = params.page || 1;
     const pageSize = params.pageSize || 20;
 
@@ -76,6 +78,8 @@ export const exceptionHandlingService = {
   },
 
   getStats() {
+    exceptionHandlingRepository.syncExceptionNodes();
+
     const pending = exceptionHandlingRepository.countByHandlingStatus('pending');
     const resolved = exceptionHandlingRepository.countByHandlingStatus('resolved');
     const escalated = exceptionHandlingRepository.countByHandlingStatus('escalated');

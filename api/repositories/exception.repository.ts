@@ -329,19 +329,30 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     return row.count;
   }
 
-  syncExceptionNodes(): number {
+  syncExceptionNodes(): { total: number; created: number; existing: number; skipped: number } {
     const exceptionNodes = nodeRepository.findByStatus('exception');
     let createdCount = 0;
+    let existingCount = 0;
+    let skippedCount = 0;
 
     for (const node of exceptionNodes) {
       const existing = this.findByNodeId(node.id);
-      if (existing) continue;
+      if (existing) {
+        existingCount++;
+        continue;
+      }
 
       const task = taskRepository.findById(node.taskId);
-      if (!task) continue;
+      if (!task) {
+        skippedCount++;
+        continue;
+      }
 
       const order = orderRepository.findById(task.orderId);
-      if (!order) continue;
+      if (!order) {
+        skippedCount++;
+        continue;
+      }
 
       this.createHandling({
         nodeId: node.id,
@@ -357,7 +368,12 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
       createdCount++;
     }
 
-    return createdCount;
+    return {
+      total: exceptionNodes.length,
+      created: createdCount,
+      existing: existingCount,
+      skipped: skippedCount,
+    };
   }
 }
 

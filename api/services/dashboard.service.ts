@@ -36,6 +36,8 @@ export const dashboardService = {
       .map(t => taskRepository.findByIdWithDetails(t.id))
       .filter((t): t is DeliveryTask => t !== undefined);
 
+    exceptionHandlingRepository.syncExceptionNodes();
+
     const recentExceptionsRaw = nodeRepository.findRecentExceptions(10);
     const recentExceptions = recentExceptionsRaw.map(node => {
       const handling = exceptionHandlingRepository.findByNodeId(node.id);
@@ -361,6 +363,8 @@ export const dashboardService = {
   },
 
   getRecentExceptions(limit: number = 10): Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus }> {
+    exceptionHandlingRepository.syncExceptionNodes();
+
     const recentExceptionsRaw = nodeRepository.findRecentExceptions(limit);
     return recentExceptionsRaw.map(node => {
       const handling = exceptionHandlingRepository.findByNodeId(node.id);

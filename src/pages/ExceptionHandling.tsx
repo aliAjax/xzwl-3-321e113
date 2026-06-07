@@ -132,8 +132,8 @@ function ExceptionHandling() {
     setLoading(true)
     try {
       const params: ExceptionHandlingQueryParams = {}
-      if (filters.startDate) params.startDate = filters.startDate
-      if (filters.endDate) params.endDate = filters.endDate
+      if (filters.startDate) params.startDate = `${filters.startDate}T00:00:00.000Z`
+      if (filters.endDate) params.endDate = `${filters.endDate}T23:59:59.999Z`
       if (filters.temperatureZone) params.temperatureZone = filters.temperatureZone
       if (filters.driverId) params.driverId = filters.driverId
       if (filters.orderStatus) params.orderStatus = filters.orderStatus

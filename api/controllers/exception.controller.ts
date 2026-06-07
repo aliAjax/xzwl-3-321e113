@@ -12,7 +12,10 @@ export const exceptionHandlingController = {
   async syncExceptions(req: Request, res: Response): Promise<Response> {
     try {
       const result = await exceptionHandlingService.syncExceptions();
-      return res.status(200).json({ message: `同步成功，新增 ${result.synced} 条异常记录`, ...result });
+      return res.status(200).json({
+        message: `同步成功，共 ${result.total} 个异常节点，新增 ${result.created} 条，已存在 ${result.existing} 条，跳过 ${result.skipped} 条`,
+        ...result,
+      });
     } catch (error) {
       return res.status(500).json({ message: '同步异常记录失败', error: (error as Error).message });
     }
