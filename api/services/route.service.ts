@@ -163,4 +163,44 @@ export const routeService = {
 
     return routeRepository.updateRoute(routeId, { stops: optimizedStops });
   },
+
+  getAllRoutes(options?: { limit?: number; offset?: number }): Route[] {
+    return this.findAll(options);
+  },
+
+  getRouteById(id: string): Route | undefined {
+    return this.findById(id);
+  },
+
+  getRouteByName(name: string): Route | undefined {
+    return this.findByName(name);
+  },
+
+  searchRoutesByName(name: string): Route[] {
+    return this.searchByName(name);
+  },
+
+  getRoutesByAddress(address: string): Route[] {
+    return this.findByAddress(address);
+  },
+
+  createRoute(data: Omit<Route, 'id' | 'createdAt'>): Route {
+    return this.create(data);
+  },
+
+  updateRoute(id: string, data: Partial<Omit<Route, 'id' | 'createdAt'>>): Route | undefined {
+    return this.update(id, data);
+  },
+
+  deleteRoute(id: string): boolean {
+    return this.delete(id);
+  },
+
+  countRoutes(): number {
+    return this.count();
+  },
+
+  routeExists(id: string): boolean {
+    return this.exists(id);
+  },
 };

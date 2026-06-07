@@ -356,4 +356,33 @@ export const loadingService = {
 
     return { ready: issues.length === 0, issues };
   },
+
+  getLoadingBatches(options?: { limit?: number; offset?: number }): LoadingBatch[] {
+    return this.findAllBatches(options);
+  },
+
+  getLoadingBatchById(id: string): LoadingBatch | undefined {
+    return this.findBatchById(id);
+  },
+
+  getLoadingTasks(batchId: string): DeliveryTask[] {
+    return taskRepository.findByBatchIdWithDetails(batchId);
+  },
+
+  updateLoadingNode(
+    nodeId: string,
+    operatorId: string,
+    operatorName: string,
+    data: { locationText: string; temperature?: number; exceptionDescription?: string }
+  ) {
+    const node = nodeRepository.findById(nodeId);
+    if (!node) return undefined;
+
+    nodeRepository.updateNode(nodeId, {
+      operatorId,
+      operatorName,
+    });
+
+    return nodeRepository.completeNode(nodeId, data);
+  },
 };

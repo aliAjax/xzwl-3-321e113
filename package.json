@@ -9,7 +9,7 @@
     "dev:server": "tsx watch api/index.ts",
     "build": "tsc -b && vite build",
     "build:server": "tsc -p tsconfig.server.json",
-    "start": "node dist-server/index.js",
+    "start": "tsx api/index.ts",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "check": "tsc -b --noEmit",
     "db:init": "tsx scripts/init-db.ts",
@@ -18,7 +18,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "better-sqlite3": "^9.2.2",
+    "better-sqlite3": "^12.10.0",
     "jsonwebtoken": "^9.0.2",
     "bcryptjs": "^2.4.3",
     "zod": "^3.22.4",

@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Node",
     "outDir": "./dist-server",
-    "rootDir": "./api",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

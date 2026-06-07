@@ -124,4 +124,44 @@ export const customerService = {
       .sort((a, b) => b.orderCount - a.orderCount)
       .slice(0, limit);
   },
+
+  getAllCustomers(options?: { limit?: number; offset?: number }): Customer[] {
+    return this.findAll(options);
+  },
+
+  getCustomerById(id: string): Customer | undefined {
+    return this.findById(id);
+  },
+
+  getCustomerByName(name: string): Customer | undefined {
+    return this.findByName(name);
+  },
+
+  getCustomersByPriority(priority: number): Customer[] {
+    return this.findByPriority(priority);
+  },
+
+  searchCustomersByName(name: string): Customer[] {
+    return this.searchByName(name);
+  },
+
+  createCustomer(data: Omit<Customer, 'id' | 'createdAt'>): Customer {
+    return this.create(data);
+  },
+
+  updateCustomer(id: string, data: Partial<Omit<Customer, 'id' | 'createdAt'>>): Customer | undefined {
+    return this.update(id, data);
+  },
+
+  deleteCustomer(id: string): boolean {
+    return this.delete(id);
+  },
+
+  countCustomers(): number {
+    return this.count();
+  },
+
+  customerExists(id: string): boolean {
+    return this.exists(id);
+  },
 };

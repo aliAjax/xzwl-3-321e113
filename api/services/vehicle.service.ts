@@ -176,4 +176,60 @@ export const vehicleService = {
       v.temperatureZones.includes(requiredZone)
     );
   },
+
+  getAllVehicles(options?: { limit?: number; offset?: number }): Vehicle[] {
+    return this.findAll(options);
+  },
+
+  getVehicleById(id: string): Vehicle | undefined {
+    return this.findById(id);
+  },
+
+  getVehicleByPlateNo(plateNo: string): Vehicle | undefined {
+    return this.findByPlateNo(plateNo);
+  },
+
+  getVehiclesByStatus(status: 'active' | 'maintenance' | 'disabled'): Vehicle[] {
+    return this.findByStatus(status);
+  },
+
+  getAvailableVehicles(): Vehicle[] {
+    return this.findAvailableVehicles();
+  },
+
+  getVehiclesByTemperatureZone(temperatureZone: TemperatureZone): Vehicle[] {
+    return this.findByTemperatureZone(temperatureZone);
+  },
+
+  getVehiclesWithCapacity(minCapacity: number): Vehicle[] {
+    return this.findVehiclesWithCapacity(minCapacity);
+  },
+
+  searchVehiclesByPlateNo(plateNo: string): Vehicle[] {
+    return this.searchByPlateNo(plateNo);
+  },
+
+  createVehicle(data: Omit<Vehicle, 'id' | 'createdAt'>): Vehicle {
+    return this.create(data);
+  },
+
+  updateVehicle(id: string, data: Partial<Omit<Vehicle, 'id' | 'createdAt'>>): Vehicle | undefined {
+    return this.update(id, data);
+  },
+
+  updateVehicleStatus(id: string, status: 'active' | 'maintenance' | 'disabled'): Vehicle | undefined {
+    return this.updateStatus(id, status);
+  },
+
+  deleteVehicle(id: string): boolean {
+    return this.delete(id);
+  },
+
+  countVehicles(): number {
+    return this.count();
+  },
+
+  vehicleExists(id: string): boolean {
+    return this.exists(id);
+  },
 };

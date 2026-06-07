@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { loadingService } from '../services/loading.service';
+import type { User } from '@shared/types';
 
 export const loadingController = {
   async getBatches(req: Request, res: Response): Promise<Response> {
@@ -39,7 +40,11 @@ export const loadingController = {
         return res.status(400).json({ message: '批次ID不能为空' });
       }
 
-      const batch = await loadingService.startLoading(batchId);
+      if (!req.user) {
+        return res.status(401).json({ message: '未登录' });
+      }
+
+      const batch = await loadingService.startLoading(batchId, req.user as User);
 
       if (!batch) {
         return res.status(400).json({ message: '开始装车失败，请检查批次状态是否正确' });
@@ -104,7 +109,11 @@ export const loadingController = {
         return res.status(400).json({ message: '批次ID不能为空' });
       }
 
-      const batch = await loadingService.completeLoading(batchId);
+      if (!req.user) {
+        return res.status(401).json({ message: '未登录' });
+      }
+
+      const batch = await loadingService.completeLoading(batchId, req.user as User);
 
       if (!batch) {
         return res.status(400).json({ message: '完成装车失败，请检查批次状态是否正确' });

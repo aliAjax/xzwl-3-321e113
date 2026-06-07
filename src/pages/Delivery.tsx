@@ -42,7 +42,7 @@ function Delivery() {
 
   async function loadTasks() {
     try {
-      const data = await api.get<DeliveryTask[]>('/delivery/tasks')
+      const data = await api.get<DeliveryTask[]>('/delivery/tasks/driver')
       setTasks(data)
     } catch (error) {
       console.error('Failed to load delivery tasks:', error)
@@ -87,8 +87,8 @@ function Delivery() {
         temperature: updateForm.temperature ? parseFloat(updateForm.temperature) : undefined,
       }
 
-      await api.put(
-        `/delivery/tasks/${updateForm.taskId}/nodes/${updateForm.nodeId}`,
+      await api.patch(
+        `/delivery/nodes/${updateForm.nodeId}`,
         request
       )
 

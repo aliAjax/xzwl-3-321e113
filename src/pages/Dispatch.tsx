@@ -73,8 +73,9 @@ function Dispatch() {
 
     setMatching(true)
     try {
-      const results = await api.post<DispatchMatchResult[]>('/dispatch/match', {
+      const results = await api.post<DispatchMatchResult[]>('/dispatch/matches', {
         orderIds: selectedOrders,
+        scheduledTime: scheduledTime || new Date().toISOString(),
       })
       setMatchResults(results)
     } catch (error) {

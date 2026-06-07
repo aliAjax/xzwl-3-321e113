@@ -340,4 +340,21 @@ export const dashboardService = {
       new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
   },
+
+  getTodayTasks(): DeliveryTask[] {
+    return this.getStats().todayTasks;
+  },
+
+  getRecentExceptions(limit: number = 10): DeliveryNode[] {
+    return nodeRepository.findRecentExceptions(limit);
+  },
+
+  getStatusCounts() {
+    return this.getStatusDistribution();
+  },
+
+  getDailyStats(days: number = 7) {
+    const trend = this.getWeeklyTrend();
+    return days >= trend.length ? trend : trend.slice(-days);
+  },
 };

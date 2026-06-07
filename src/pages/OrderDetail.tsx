@@ -11,14 +11,14 @@ import {
   formatPhone,
 } from '@/utils/format'
 import Timeline from '@/components/Timeline'
-import type { Order, DeliveryTask } from '@shared/types'
+import type { Order, DeliveryNode, OrderTimeline } from '@shared/types'
 import clsx from 'clsx'
 
 function OrderDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [order, setOrder] = useState<Order | null>(null)
-  const [tasks, setTasks] = useState<DeliveryTask[]>([])
+  const [timelineNodes, setTimelineNodes] = useState<DeliveryNode[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -29,12 +29,17 @@ function OrderDetail() {
 
   async function loadOrderDetail() {
     try {
-      const [orderData, tasksData] = await Promise.all([
+      const [orderData, timelineData] = await Promise.all([
         api.get<Order>(`/orders/${id}`),
-        api.get<DeliveryTask[]>(`/orders/${id}/tasks`),
+        api.get<OrderTimeline>(`/orders/${id}/timeline`),
       ])
       setOrder(orderData)
-      setTasks(tasksData)
+      setTimelineNodes(timelineData.events.map((event) => ({
+        ...event,
+        taskId: '',
+        operatorId: event.operatorId || '',
+        operatorName: event.operatorName || '',
+      })))
     } catch (error) {
       console.error('Failed to load order detail:', error)
     } finally {
@@ -52,8 +57,6 @@ function OrderDetail() {
 
   const statusInfo = formatOrderStatus(order.status)
   const tempZoneInfo = formatTemperatureZone(order.temperatureZone)
-  const allNodes = tasks.flatMap((t) => t.nodes || [])
-
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -132,7 +135,7 @@ function OrderDetail() {
               <Clock size={20} />
               配送追踪
             </h2>
-            <Timeline nodes={allNodes} />
+            <Timeline nodes={timelineNodes} />
           </div>
         </div>
 
@@ -181,35 +184,29 @@ function OrderDetail() {
           )}
 
           <div className="card">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">相关任务</h2>
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">追踪节点</h2>
             <div className="space-y-3">
-              {tasks.length > 0 ? (
-                tasks.map((task) => {
-                  const taskStatusInfo = formatOrderStatus(task.status)
-                  return (
-                    <div
-                      key={task.id}
-                      className="p-3 bg-gray-50 rounded-lg border border-gray-100"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-800">
-                          配送任务
-                        </span>
-                        <span className={clsx('status-badge text-xs', taskStatusInfo.color)}>
-                          {taskStatusInfo.label}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-500">
-                        车辆：{task.vehicle?.plateNo || '-'}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        司机：{task.driver?.name || '-'}
-                      </p>
+              {timelineNodes.length > 0 ? (
+                timelineNodes.map((node) => (
+                  <div
+                    key={node.id}
+                    className="p-3 bg-gray-50 rounded-lg border border-gray-100"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-gray-800">
+                        {node.nodeName}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {node.status}
+                      </span>
                     </div>
-                  )
-                })
+                    <p className="text-xs text-gray-500">
+                      {node.recordedAt ? formatDateTime(node.recordedAt) : '待记录'}
+                    </p>
+                  </div>
+                ))
               ) : (
-                <p className="text-sm text-gray-500 text-center py-4">暂无配送任务</p>
+                <p className="text-sm text-gray-500 text-center py-4">暂无追踪节点</p>
               )}
             </div>
           </div>

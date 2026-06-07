@@ -168,4 +168,52 @@ export const driverService = {
 
     return { available: true };
   },
+
+  getAllDrivers(options?: { limit?: number; offset?: number }): Driver[] {
+    return this.findAll(options);
+  },
+
+  getDriverById(id: string): Driver | undefined {
+    return this.findById(id);
+  },
+
+  getDriverByName(name: string): Driver | undefined {
+    return this.findByName(name);
+  },
+
+  getDriversByStatus(status: 'on_duty' | 'off_duty' | 'on_leave'): Driver[] {
+    return this.findByStatus(status);
+  },
+
+  getOnDutyDrivers(): Driver[] {
+    return this.findOnDutyDrivers();
+  },
+
+  searchDriversByName(name: string): Driver[] {
+    return this.searchByName(name);
+  },
+
+  createDriver(data: Omit<Driver, 'id' | 'createdAt'>): Driver {
+    return this.create(data);
+  },
+
+  updateDriver(id: string, data: Partial<Omit<Driver, 'id' | 'createdAt'>>): Driver | undefined {
+    return this.update(id, data);
+  },
+
+  updateDriverStatus(id: string, status: 'on_duty' | 'off_duty' | 'on_leave'): Driver | undefined {
+    return this.updateStatus(id, status);
+  },
+
+  deleteDriver(id: string): boolean {
+    return this.delete(id);
+  },
+
+  countDrivers(): number {
+    return this.count();
+  },
+
+  driverExists(id: string): boolean {
+    return this.exists(id);
+  },
 };
