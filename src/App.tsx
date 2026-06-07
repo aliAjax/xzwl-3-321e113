@@ -15,7 +15,7 @@ import DriverManagement from '@/pages/DriverManagement'
 import CustomerManagement from '@/pages/CustomerManagement'
 import RouteManagement from '@/pages/RouteManagement'
 import ExceptionHandling from '@/pages/ExceptionHandling'
-
+import TemperatureRecordImport from '@/pages/TemperatureRecordImport';
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   return isAuthenticated ? children : <Navigate to="/login" replace />
@@ -36,6 +36,7 @@ function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="temperature-zone" element={<TemperatureZoneDashboard />} />
+        <Route path="temperature-import" element={<TemperatureRecordImport />} />
         <Route path="orders" element={<OrderList />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="warehouse" element={<WarehouseIn />} />

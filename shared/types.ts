@@ -364,3 +364,71 @@ export interface DashboardStats {
   pendingExceptionCount: number;
   handledExceptionCount: number;
 }
+
+export type TemperatureRecordStatus = 'importable' | 'abnormal' | 'unmatched';
+
+export interface TemperatureRecordCsvRow {
+  orderNo: string;
+  nodeType: string;
+  recordedAt: string;
+  temperature: string;
+  locationText?: string;
+  operatorName?: string;
+}
+
+export interface TemperatureRecordParsed {
+  lineNumber: number;
+  orderNo: string;
+  nodeType: NodeType | null;
+  recordedAt: Date | null;
+  temperature: number | null;
+  locationText: string;
+  operatorName: string;
+}
+
+export interface TemperatureRecordMatched {
+  orderId: string;
+  orderNo: string;
+  order: Order;
+  taskId: string;
+  task: DeliveryTask;
+  nodeId: string;
+  node: DeliveryNode;
+}
+
+export interface TemperatureRecordValidationResult {
+  lineNumber: number;
+  status: TemperatureRecordStatus;
+  parsed: TemperatureRecordParsed;
+  matched?: TemperatureRecordMatched;
+  failureReasons: string[];
+}
+
+export interface TemperatureRecordImportPreview {
+  totalCount: number;
+  importableCount: number;
+  abnormalCount: number;
+  unmatchedCount: number;
+  importableRecords: TemperatureRecordValidationResult[];
+  abnormalRecords: TemperatureRecordValidationResult[];
+  unmatchedRecords: TemperatureRecordValidationResult[];
+}
+
+export interface TemperatureRecordImportRequest {
+  records: TemperatureRecordValidationResult[];
+}
+
+export interface TemperatureRecordImportResult {
+  successCount: number;
+  failedCount: number;
+  exceptionCreatedCount: number;
+  results: Array<{
+    lineNumber: number;
+    orderNo: string;
+    success: boolean;
+    isException: boolean;
+    nodeId?: string;
+    exceptionId?: string;
+    message: string;
+  }>;
+}
