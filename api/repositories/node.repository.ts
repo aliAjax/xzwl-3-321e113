@@ -114,9 +114,10 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
       locationText: string;
       temperature?: number;
       exceptionDescription?: string;
+      recordedAt?: string;
     }
   ): DeliveryNode | undefined {
-    const now = new Date().toISOString();
+    const now = data.recordedAt || new Date().toISOString();
     const status: NodeStatus = data.exceptionDescription ? 'exception' : 'completed';
 
     return this.update(id, {

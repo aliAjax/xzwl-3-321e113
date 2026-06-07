@@ -58,7 +58,7 @@ function parseCsvText(csvText: string): TemperatureRecordCsvRow[] {
     if (header === '订单号' || header === 'orderno') columnMap.orderNo = index;
     if (header === '节点类型' || header === 'nodetype') columnMap.nodeType = index;
     if (header === '记录时间' || header === 'recordedat') columnMap.recordedAt = index;
-    if (header === '温度' || header === 'temperature') columnMap.temperature = index;
+    if (header === '温度' || header === '温度值' || header === 'temperature') columnMap.temperature = index;
     if (header === '位置' || header === 'locationtext') columnMap.locationText = index;
     if (header === '操作人' || header === 'operatorname') columnMap.operatorName = index;
   });
@@ -332,6 +332,7 @@ function executeImport(
         nodeRepository.completeNode(node.id, {
           locationText: parsed.locationText,
           temperature: parsed.temperature!,
+          recordedAt: parsed.recordedAt!.toISOString(),
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
@@ -352,6 +353,7 @@ function executeImport(
           locationText: parsed.locationText,
           temperature: parsed.temperature!,
           exceptionDescription: exceptionDesc,
+          recordedAt: parsed.recordedAt!.toISOString(),
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');

@@ -208,7 +208,7 @@ function TemperatureRecordImport() {
   }
 
   const downloadTemplate = () => {
-    const template = `订单号,节点类型,记录时间,温度值,位置,操作人
+    const template = `订单号,节点类型,记录时间,温度,位置,操作人
 ORD001,warehouse_in,2024-01-01 10:00:00,5.5,一号仓库,张三
 ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
     const blob = new Blob([template], { type: 'text/csv;charset=utf-8;' })
@@ -302,7 +302,7 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
                 setFileName('')
               }}
               onPaste={handlePaste}
-              placeholder="请粘贴CSV格式的温度记录数据...&#10;订单号,节点类型,记录时间,温度值,位置,操作人"
+              placeholder="请粘贴CSV格式的温度记录数据...&#10;订单号,节点类型,记录时间,温度,位置,操作人"
               rows={10}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-sm"
             />
