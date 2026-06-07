@@ -1,4 +1,5 @@
 import db from '../db';
+import { v4 as uuidv4 } from 'uuid';
 import type { Database, RunResult } from 'better-sqlite3';
 
 export interface FindOptions {
@@ -110,7 +111,9 @@ export abstract class BaseRepository<T extends { id: string }> {
   }
 
   create(data: Omit<T, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): T {
-    const dbData = this.toDatabase(data as Partial<T>);
+    const id = (data as { id?: string }).id || uuidv4();
+    const dataWithId = { ...data, id } as Partial<T>;
+    const dbData = this.toDatabase(dataWithId);
     const fields = Object.keys(dbData);
     const placeholders = fields.map(() => '?').join(', ');
     const values = Object.values(dbData);
@@ -118,8 +121,7 @@ export abstract class BaseRepository<T extends { id: string }> {
     const sql = `INSERT INTO ${this.tableName} (${fields.join(', ')}) VALUES (${placeholders})`;
     this.db.prepare(sql).run(...values);
 
-    const id = (data as { id?: string }).id;
-    return this.findById(id as string) as T;
+    return this.findById(id) as T;
   }
 
   update(id: string, data: Partial<Omit<T, 'id' | 'createdAt'>>): T | undefined {
