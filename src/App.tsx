@@ -3,6 +3,7 @@ import { useAuthStore } from '@/store/authStore'
 import Layout from '@/components/Layout'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
+import TemperatureZoneDashboard from '@/pages/TemperatureZoneDashboard'
 import OrderList from '@/pages/OrderList'
 import OrderDetail from '@/pages/OrderDetail'
 import Dispatch from '@/pages/Dispatch'
@@ -33,6 +34,7 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
+        <Route path="temperature-zone" element={<TemperatureZoneDashboard />} />
         <Route path="orders" element={<OrderList />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="warehouse" element={<WarehouseIn />} />

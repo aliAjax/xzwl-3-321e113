@@ -11,6 +11,7 @@ import loadingRoutes from './routes/loading.routes';
 import deliveryRoutes from './routes/delivery.routes';
 import dashboardRoutes from './routes/dashboard.routes';
 import warehouseRoutes from './routes/warehouse.routes';
+import temperatureZoneRoutes from './routes/temperatureZone.routes';
 
 const app = express();
 const PORT = 3001;
@@ -29,6 +30,7 @@ app.use('/api/loading', loadingRoutes);
 app.use('/api/delivery', deliveryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/warehouse', warehouseRoutes);
+app.use('/api/temperature-zone', temperatureZoneRoutes);
 
 app.get('/api/health', (req: Request, res: Response) => {
   res.status(200).json({ status: 'ok', message: '冷链物流配送系统 API 服务正常运行' });

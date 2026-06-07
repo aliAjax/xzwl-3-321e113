@@ -207,3 +207,30 @@ export interface DashboardStats {
   todayTasks: DeliveryTask[];
   recentExceptions: DeliveryNode[];
 }
+
+export interface TemperatureZoneStats {
+  pendingOrders: number;
+  inTransitOrders: number;
+  availableVehicles: number;
+}
+
+export interface TemperatureZoneAbnormalRecord {
+  id: string;
+  orderId: string;
+  orderNo: string;
+  temperatureZone: TemperatureZone;
+  temperature: number;
+  minTemp: number;
+  maxTemp: number;
+  recordedAt: string;
+  locationText: string;
+  operatorName: string;
+  exceptionDescription?: string;
+}
+
+export interface TemperatureZoneSummary {
+  frozen: TemperatureZoneStats;
+  chilled: TemperatureZoneStats;
+  ambient: TemperatureZoneStats;
+  recentAbnormalRecords: TemperatureZoneAbnormalRecord[];
+}
