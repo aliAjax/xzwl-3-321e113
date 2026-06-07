@@ -5,13 +5,14 @@ import type { DispatchRequest } from '@shared/types';
 export const dispatchController = {
   async findMatches(req: Request, res: Response): Promise<Response> {
     try {
-      const { orderIds } = req.body as { orderIds: string[] };
+      const { orderIds, scheduledTime } = req.body as { orderIds: string[]; scheduledTime?: string };
 
       if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
         return res.status(400).json({ message: '订单ID列表不能为空' });
       }
 
-      const matches = await dispatchService.findMatches(orderIds);
+      const time = scheduledTime || new Date().toISOString();
+      const matches = dispatchService.findMatchingVehicles(orderIds, time);
       return res.status(200).json(matches);
     } catch (error) {
       return res.status(500).json({ message: '获取匹配结果失败', error: (error as Error).message });

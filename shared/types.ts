@@ -162,6 +162,30 @@ export interface NodeUpdateRequest {
   temperature?: number;
 }
 
+export interface OrderTimelineEvent {
+  id: string;
+  nodeType: NodeType;
+  nodeName: string;
+  status: NodeStatus;
+  recordedAt?: string;
+  locationText: string;
+  exceptionDescription?: string;
+  temperature?: number;
+  operatorId?: string;
+  operatorName?: string;
+  createdAt: string;
+}
+
+export interface OrderTimeline {
+  orderId: string;
+  orderNo: string;
+  status: OrderStatus;
+  events: OrderTimelineEvent[];
+  currentNode?: OrderTimelineEvent;
+  completedCount: number;
+  totalCount: number;
+}
+
 export interface DashboardStats {
   todayDeliveries: number;
   exceptionOrders: number;

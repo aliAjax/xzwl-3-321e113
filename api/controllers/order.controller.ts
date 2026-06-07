@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { orderService } from '../services/order.service';
-import type { Order, OrderStatus, TemperatureZone } from '@shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline } from '@shared/types';
 
 export const orderController = {
   async getAll(req: Request, res: Response): Promise<Response> {
@@ -231,6 +231,26 @@ export const orderController = {
       return res.status(200).json({ count });
     } catch (error) {
       return res.status(500).json({ message: '获取订单数量失败', error: (error as Error).message });
+    }
+  },
+
+  async getTimeline(req: Request, res: Response): Promise<Response> {
+    try {
+      const { id } = req.params;
+
+      if (!id) {
+        return res.status(400).json({ message: '订单ID不能为空' });
+      }
+
+      const timeline = await orderService.getOrderTimeline(id);
+
+      if (!timeline) {
+        return res.status(404).json({ message: '订单不存在' });
+      }
+
+      return res.status(200).json(timeline);
+    } catch (error) {
+      return res.status(500).json({ message: '获取订单追踪信息失败', error: (error as Error).message });
     }
   },
 };

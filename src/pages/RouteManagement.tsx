@@ -404,7 +404,7 @@ function RouteManagement() {
                   预计总时长:{' '}
                   {formatDuration(getTotalEstimatedTime(
                     formData.stops.map((s, i) => ({ ...s, order: i + 1 }))
-                  )}
+                  ))}
                 </span>
               </div>
             )}

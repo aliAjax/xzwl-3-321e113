@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   MapPin,
   Package,
+  Truck,
   Clock,
   CheckCircle,
   AlertCircle,

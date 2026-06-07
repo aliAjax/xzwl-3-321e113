@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { deliveryService } from '../services/delivery.service';
-import type { NodeUpdateRequest, NodeType } from '@shared/types';
+import type { NodeUpdateRequest, NodeType, User } from '@shared/types';
 
 export const deliveryController = {
   async getDriverTasks(req: Request, res: Response): Promise<Response> {
@@ -59,7 +59,7 @@ export const deliveryController = {
 
   async updateNode(req: Request, res: Response): Promise<Response> {
     try {
-      const { nodeId } = req.params;
+      const nodeId = req.params.nodeId || req.params.id;
       const request = req.body as NodeUpdateRequest;
 
       if (!nodeId) {
@@ -74,11 +74,10 @@ export const deliveryController = {
         return res.status(401).json({ message: '未登录' });
       }
 
-      const node = await deliveryService.updateNode(
+      const node = deliveryService.updateNodeStatus(
         nodeId,
-        req.user.id,
-        req.user.name,
-        request
+        request,
+        req.user as User
       );
 
       if (!node) {
@@ -99,7 +98,11 @@ export const deliveryController = {
         return res.status(400).json({ message: '节点ID不能为空' });
       }
 
-      const node = await deliveryService.startNode(nodeId);
+      if (!req.user) {
+        return res.status(401).json({ message: '未登录' });
+      }
+
+      const node = deliveryService.startNode(nodeId, req.user as User);
 
       if (!node) {
         return res.status(404).json({ message: '节点不存在或状态不正确' });
@@ -120,7 +123,15 @@ export const deliveryController = {
         return res.status(400).json({ message: '任务ID和节点类型不能为空' });
       }
 
-      const node = await deliveryService.createNextNode(taskId, nodeType);
+      if (!req.user) {
+        return res.status(401).json({ message: '未登录' });
+      }
+
+      const node = deliveryService.createDeliveryNode(
+        taskId,
+        nodeType,
+        req.user as User
+      );
 
       if (!node) {
         return res.status(404).json({ message: '任务不存在' });

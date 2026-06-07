@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { orderRepository } from '../repositories/order.repository';
-import type { Order, OrderStatus, TemperatureZone } from '@shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline } from '@shared/types';
 
 export const orderService = {
   async getAllOrders(options?: { limit?: number; offset?: number }): Promise<Order[]> {
@@ -58,5 +58,9 @@ export const orderService = {
 
   async orderExists(id: string): Promise<boolean> {
     return orderRepository.exists(id);
+  },
+
+  async getOrderTimeline(orderId: string): Promise<OrderTimeline | undefined> {
+    return orderRepository.findTimelineByOrderId(orderId);
   },
 };

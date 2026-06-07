@@ -13,6 +13,7 @@ router.get('/status/:status', authMiddleware, requireRoles('admin', 'dispatcher'
 router.get('/temperature-zone/:temperatureZone', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.getByTemperatureZone);
 router.get('/customer/:customerId', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.getByCustomerId);
 router.get('/order-no/:orderNo', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.getByOrderNo);
+router.get('/:id/timeline', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), orderController.getTimeline);
 router.get('/:id', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), orderController.getById);
 router.post('/', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.create);
 router.put('/:id', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.update);

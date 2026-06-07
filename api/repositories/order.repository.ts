@@ -1,5 +1,5 @@
 import { BaseRepository } from './base';
-import type { Order, OrderStatus, TemperatureZone } from '../../shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline, OrderTimelineEvent, NodeType } from '../../shared/types';
 
 class OrderRepository extends BaseRepository<Order> {
   protected tableName = 'orders';
@@ -158,6 +158,71 @@ class OrderRepository extends BaseRepository<Order> {
   updateOrder(id: string, data: Partial<Omit<Order, 'id' | 'createdAt'>>): Order | undefined {
     const now = new Date().toISOString();
     return this.update(id, { ...data, updatedAt: now });
+  }
+
+  findTimelineByOrderId(orderId: string): OrderTimeline | undefined {
+    const order = this.findById(orderId);
+    if (!order) return undefined;
+
+    const taskRow = this.db
+      .prepare(
+        `SELECT t.id as task_id
+         FROM delivery_tasks t
+         WHERE t.order_id = ?
+         ORDER BY t.created_at DESC
+         LIMIT 1`
+      )
+      .get(orderId) as { task_id: string } | undefined;
+
+    const events: OrderTimelineEvent[] = [];
+
+    if (taskRow) {
+      const nodeRows = this.db
+        .prepare(
+          `SELECT n.*
+           FROM delivery_nodes n
+           WHERE n.task_id = ?
+           ORDER BY n.created_at ASC`
+        )
+        .all(taskRow.task_id) as Record<string, unknown>[];
+
+      const nodeTypeOrder: NodeType[] = ['warehouse_in', 'loading', 'departure', 'arrival', 'delivery', 'signature'];
+      const sortedNodes = nodeRows.sort((a, b) => {
+        const aType = a.node_type as NodeType;
+        const bType = b.node_type as NodeType;
+        return nodeTypeOrder.indexOf(aType) - nodeTypeOrder.indexOf(bType);
+      });
+
+      for (const row of sortedNodes) {
+        events.push({
+          id: row.id as string,
+          nodeType: row.node_type as NodeType,
+          nodeName: row.node_name as string,
+          status: row.status as OrderTimelineEvent['status'],
+          recordedAt: row.recorded_at as string | undefined,
+          locationText: row.location_text as string,
+          exceptionDescription: row.exception_description as string | undefined,
+          temperature: row.temperature as number | undefined,
+          operatorId: row.operator_id as string | undefined,
+          operatorName: row.operator_name as string | undefined,
+          createdAt: row.created_at as string,
+        });
+      }
+    }
+
+    const completedCount = events.filter(e => e.status === 'completed' || e.status === 'exception').length;
+    const totalCount = events.length;
+    const currentNode = events.find(e => e.status === 'in_progress') || events.find(e => e.status === 'pending');
+
+    return {
+      orderId: order.id,
+      orderNo: order.orderNo,
+      status: order.status,
+      events,
+      currentNode,
+      completedCount,
+      totalCount,
+    };
   }
 }
 

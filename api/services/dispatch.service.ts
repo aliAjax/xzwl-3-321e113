@@ -218,9 +218,9 @@ export const dispatchService = {
       errors.push('部分订单不存在');
     }
 
-    const invalidStatusOrders = orders.filter(o => o.status !== 'warehoused');
+    const invalidStatusOrders = orders.filter(o => !['created', 'warehoused'].includes(o.status));
     if (invalidStatusOrders.length > 0) {
-      errors.push(`以下订单状态不正确，需要为 warehoused：${invalidStatusOrders.map(o => o.orderNo).join(', ')}`);
+      errors.push(`以下订单状态不正确，需要为 created 或 warehoused：${invalidStatusOrders.map(o => o.orderNo).join(', ')}`);
     }
 
     const vehicle = vehicleRepository.findById(request.vehicleId);
@@ -283,7 +283,7 @@ export const dispatchService = {
     const batchId = generateId();
     const now = new Date().toISOString();
 
-    const batch = batchRepository.createBatch({
+    const batch = batchRepository.create({
       id: batchId,
       batchNo,
       vehicleId: request.vehicleId,
@@ -298,7 +298,7 @@ export const dispatchService = {
     for (const order of orders) {
       const taskId = generateId();
 
-      const task = taskRepository.createTask({
+      const task = taskRepository.create({
         id: taskId,
         batchId,
         orderId: order.id,
@@ -410,5 +410,19 @@ export const dispatchService = {
 
     const tasks = taskRepository.findByBatchIdWithDetails(batchId);
     return { batch, tasks };
+  },
+
+  createDispatch(request: DispatchRequest) {
+    return this.createDeliveryTasks(request);
+  },
+
+  getDispatchById(id: string) {
+    return this.getDispatchByBatchId(id);
+  },
+
+  getDispatchesByDateRange(startDate: string, endDate: string) {
+    return batchRepository.findByDateRange(startDate, endDate).map(batch =>
+      batchRepository.findByIdWithDetails(batch.id)
+    ).filter(Boolean);
   },
 };

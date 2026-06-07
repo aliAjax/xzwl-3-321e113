@@ -506,4 +506,41 @@ export const deliveryService = {
       completionRate: tasks.length > 0 ? (completedTasks.length / tasks.length) * 100 : 0,
     };
   },
+
+  getDriverTasks(driverId: string) {
+    return this.findActiveTasksByDriverId(driverId);
+  },
+
+  getTaskById(taskId: string) {
+    return this.findTaskById(taskId);
+  },
+
+  getTaskNodes(taskId: string) {
+    return nodeRepository.findByTaskIdWithDetails(taskId);
+  },
+
+  getTasksByBatchId(batchId: string) {
+    return this.findTasksByBatchId(batchId);
+  },
+
+  getExceptionNodes(startDate: string, endDate: string) {
+    return nodeRepository.findExceptionsByDateRange(startDate, endDate);
+  },
+
+  createNextNode(taskId: string, nodeType: NodeType) {
+    return this.createDeliveryNode(taskId, nodeType, {
+      id: '',
+      username: '',
+      role: 'driver',
+      name: '',
+      phone: '',
+      createdAt: ''
+    });
+  },
+
+  completeTask(taskId: string) {
+    const task = taskRepository.findById(taskId);
+    if (!task) return undefined;
+    return taskRepository.updateStatus(taskId, 'completed');
+  },
 };
