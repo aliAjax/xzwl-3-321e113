@@ -1,11 +1,13 @@
 import { format, parseISO } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
-import type {
+import {
   OrderStatus,
   NodeStatus,
   TemperatureZone,
   UserRole,
   BatchStatus,
+  ExceptionHandlingStatus,
+  ExceptionHandlingResult,
 } from '@shared/types'
 
 export function formatDate(date: string | Date, pattern: string = 'yyyy-MM-dd HH:mm:ss'): string {
@@ -135,4 +137,26 @@ export function formatDurationMinutes(minutes: number): string {
     return `${hours}小时`
   }
   return `${mins}分钟`
+}
+
+const handlingStatusMap: Record<ExceptionHandlingStatus, { label: string; color: string }> = {
+  pending: { label: '待处理', color: 'bg-yellow-100 text-yellow-800' },
+  resolved: { label: '已解决', color: 'bg-green-100 text-green-800' },
+  escalated: { label: '已升级', color: 'bg-red-100 text-red-800' },
+}
+
+export function formatHandlingStatus(status: ExceptionHandlingStatus): { label: string; color: string } {
+  return handlingStatusMap[status] || { label: status, color: 'bg-gray-100 text-gray-800' }
+}
+
+const handlingResultMap: Record<ExceptionHandlingResult, { label: string }> = {
+  recovered: { label: '已恢复正常' },
+  compensated: { label: '已赔偿' },
+  re_routed: { label: '已改派' },
+  cancelled: { label: '已取消订单' },
+  other: { label: '其他' },
+}
+
+export function formatHandlingResult(result: ExceptionHandlingResult): { label: string } {
+  return handlingResultMap[result] || { label: result }
 }

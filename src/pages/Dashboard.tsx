@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Package, AlertTriangle, Truck, Clock } from 'lucide-react'
+import { Package, AlertTriangle, Truck, Clock, CheckCircle } from 'lucide-react'
 import { api } from '@/utils/api'
-import { formatDateTime, formatOrderStatus } from '@/utils/format'
+import { formatDateTime, formatOrderStatus, formatHandlingStatus } from '@/utils/format'
 import type { DashboardStats } from '@shared/types'
 import clsx from 'clsx'
 
@@ -118,22 +118,64 @@ function Dashboard() {
         </div>
 
         <div className="card">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">异常预警</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">异常预警</h3>
+            <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                <span className="text-gray-500">未处理 {stats?.pendingExceptionCount || 0}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                <span className="text-gray-500">已处理 {stats?.handledExceptionCount || 0}</span>
+              </div>
+            </div>
+          </div>
           <div className="space-y-3">
             {stats?.recentExceptions && stats.recentExceptions.length > 0 ? (
               stats.recentExceptions.slice(0, 5).map((node) => (
                 <div
                   key={node.id}
-                  className="p-4 bg-red-50 border border-red-100 rounded-lg"
+                  className={clsx(
+                    'p-4 border rounded-lg transition-colors',
+                    node.handled
+                      ? 'bg-green-50 border-green-100'
+                      : 'bg-red-50 border-red-100'
+                  )}
                 >
                   <div className="flex items-start gap-3">
-                    <AlertTriangle size={20} className="text-red-500 flex-shrink-0 mt-0.5" />
+                    {node.handled ? (
+                      <CheckCircle size={20} className="text-green-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle size={20} className="text-red-500 flex-shrink-0 mt-0.5" />
+                    )}
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-red-800">{node.nodeName}</p>
-                      <p className="text-sm text-red-600 mt-1">
+                      <div className="flex items-center gap-2">
+                        <p className={clsx(
+                          'font-medium',
+                          node.handled ? 'text-green-800' : 'text-red-800'
+                        )}>
+                          {node.nodeName}
+                        </p>
+                        {node.handlingStatus && (
+                          <span className={clsx(
+                            'text-xs px-2 py-0.5 rounded-full',
+                            formatHandlingStatus(node.handlingStatus).color
+                          )}>
+                            {formatHandlingStatus(node.handlingStatus).label}
+                          </span>
+                        )}
+                      </div>
+                      <p className={clsx(
+                        'text-sm mt-1',
+                        node.handled ? 'text-green-600' : 'text-red-600'
+                      )}>
                         {node.exceptionDescription}
                       </p>
-                      <p className="text-xs text-red-400 mt-2">
+                      <p className={clsx(
+                        'text-xs mt-2',
+                        node.handled ? 'text-green-400' : 'text-red-400'
+                      )}>
                         {formatDateTime(node.recordedAt || node.createdAt)} · {node.operatorName}
                       </p>
                     </div>

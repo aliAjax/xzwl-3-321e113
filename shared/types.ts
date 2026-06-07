@@ -267,15 +267,6 @@ export interface WarehouseInQueryParams {
   temperatureZone?: TemperatureZone;
 }
 
-export interface DashboardStats {
-  todayDeliveries: number;
-  exceptionOrders: number;
-  inTransitVehicles: number;
-  pendingOrders: number;
-  todayTasks: DeliveryTask[];
-  recentExceptions: DeliveryNode[];
-}
-
 export interface TemperatureZoneStats {
   pendingOrders: number;
   inTransitOrders: number;
@@ -301,4 +292,75 @@ export interface TemperatureZoneSummary {
   chilled: TemperatureZoneStats;
   ambient: TemperatureZoneStats;
   recentAbnormalRecords: TemperatureZoneAbnormalRecord[];
+}
+
+export type ExceptionHandlingStatus = 'pending' | 'resolved' | 'escalated';
+export type ExceptionHandlingResult = 'recovered' | 'compensated' | 're_routed' | 'cancelled' | 'other';
+
+export interface ExceptionHandling {
+  id: string;
+  nodeId: string;
+  node?: DeliveryNode;
+  taskId: string;
+  task?: DeliveryTask;
+  orderId: string;
+  order?: Order;
+  driverId: string;
+  driver?: Driver;
+  temperatureZone: TemperatureZone;
+  exceptionDescription: string;
+  exceptionTime: string;
+  handlingStatus: ExceptionHandlingStatus;
+  handlingResult?: ExceptionHandlingResult;
+  handlingNotes?: string;
+  handledBy?: string;
+  handledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExceptionHandlingWithDetails extends ExceptionHandling {
+  order?: Order;
+  task?: DeliveryTask;
+  driver?: Driver;
+  node?: DeliveryNode;
+}
+
+export interface ExceptionHandlingQueryParams {
+  startDate?: string;
+  endDate?: string;
+  temperatureZone?: TemperatureZone;
+  driverId?: string;
+  orderStatus?: OrderStatus;
+  handlingStatus?: ExceptionHandlingStatus;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ExceptionHandlingCreateRequest {
+  nodeId: string;
+}
+
+export interface ExceptionHandlingUpdateRequest {
+  handlingStatus: ExceptionHandlingStatus;
+  handlingResult: ExceptionHandlingResult;
+  handlingNotes: string;
+}
+
+export interface ExceptionHandlingListResponse {
+  items: ExceptionHandlingWithDetails[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface DashboardStats {
+  todayDeliveries: number;
+  exceptionOrders: number;
+  inTransitVehicles: number;
+  pendingOrders: number;
+  todayTasks: DeliveryTask[];
+  recentExceptions: Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus }>;
+  pendingExceptionCount: number;
+  handledExceptionCount: number;
 }

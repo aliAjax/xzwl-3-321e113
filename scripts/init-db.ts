@@ -122,6 +122,25 @@ const migrations = [
     operator_name VARCHAR(100),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
+
+  `CREATE TABLE IF NOT EXISTS exception_handlings (
+    id VARCHAR(36) PRIMARY KEY,
+    node_id VARCHAR(36) NOT NULL REFERENCES delivery_nodes(id),
+    task_id VARCHAR(36) NOT NULL REFERENCES delivery_tasks(id),
+    order_id VARCHAR(36) NOT NULL REFERENCES orders(id),
+    driver_id VARCHAR(36) NOT NULL REFERENCES drivers(id),
+    temperature_zone VARCHAR(20) NOT NULL CHECK (temperature_zone IN ('frozen', 'chilled', 'ambient')),
+    exception_description TEXT NOT NULL,
+    exception_time DATETIME NOT NULL,
+    handling_status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (handling_status IN ('pending', 'resolved', 'escalated')),
+    handling_result VARCHAR(20) CHECK (handling_result IN ('recovered', 'compensated', 're_routed', 'cancelled', 'other')),
+    handling_notes TEXT,
+    handled_by VARCHAR(36) REFERENCES users(id),
+    handled_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(node_id)
+  )`,
 ];
 
 const indexes = [
@@ -137,6 +156,11 @@ const indexes = [
   'CREATE INDEX IF NOT EXISTS idx_tasks_status ON delivery_tasks(status)',
   'CREATE INDEX IF NOT EXISTS idx_nodes_task ON delivery_nodes(task_id)',
   'CREATE INDEX IF NOT EXISTS idx_nodes_recorded ON delivery_nodes(recorded_at)',
+  'CREATE INDEX IF NOT EXISTS idx_exception_node ON exception_handlings(node_id)',
+  'CREATE INDEX IF NOT EXISTS idx_exception_status ON exception_handlings(handling_status)',
+  'CREATE INDEX IF NOT EXISTS idx_exception_time ON exception_handlings(exception_time)',
+  'CREATE INDEX IF NOT EXISTS idx_exception_driver ON exception_handlings(driver_id)',
+  'CREATE INDEX IF NOT EXISTS idx_exception_zone ON exception_handlings(temperature_zone)',
 ];
 
 console.log('开始初始化数据库...');

@@ -4,7 +4,8 @@ import { driverRepository } from '../repositories/driver.repository';
 import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { batchRepository } from '../repositories/batch.repository';
-import type { DashboardStats, DeliveryTask, DeliveryNode, OrderStatus } from '../../shared/types';
+import { exceptionHandlingRepository } from '../repositories/exception.repository';
+import type { DashboardStats, DeliveryTask, DeliveryNode, OrderStatus, ExceptionHandlingStatus } from '../../shared/types';
 
 export const dashboardService = {
   getStats(): DashboardStats {
@@ -35,7 +36,19 @@ export const dashboardService = {
       .map(t => taskRepository.findByIdWithDetails(t.id))
       .filter((t): t is DeliveryTask => t !== undefined);
 
-    const recentExceptions = nodeRepository.findRecentExceptions(10);
+    const recentExceptionsRaw = nodeRepository.findRecentExceptions(10);
+    const recentExceptions = recentExceptionsRaw.map(node => {
+      const handling = exceptionHandlingRepository.findByNodeId(node.id);
+      return {
+        ...node,
+        handled: !!handling && handling.handlingStatus !== 'pending',
+        handlingStatus: handling?.handlingStatus,
+      };
+    });
+
+    const pendingExceptionCount = exceptionHandlingRepository.countByHandlingStatus('pending');
+    const handledExceptionCount = exceptionHandlingRepository.countByHandlingStatus('resolved') +
+      exceptionHandlingRepository.countByHandlingStatus('escalated');
 
     return {
       todayDeliveries,
@@ -44,6 +57,8 @@ export const dashboardService = {
       pendingOrders,
       todayTasks: todayTasksWithDetails,
       recentExceptions,
+      pendingExceptionCount,
+      handledExceptionCount,
     };
   },
 
@@ -345,8 +360,16 @@ export const dashboardService = {
     return this.getStats().todayTasks;
   },
 
-  getRecentExceptions(limit: number = 10): DeliveryNode[] {
-    return nodeRepository.findRecentExceptions(limit);
+  getRecentExceptions(limit: number = 10): Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus }> {
+    const recentExceptionsRaw = nodeRepository.findRecentExceptions(limit);
+    return recentExceptionsRaw.map(node => {
+      const handling = exceptionHandlingRepository.findByNodeId(node.id);
+      return {
+        ...node,
+        handled: !!handling && handling.handlingStatus !== 'pending',
+        handlingStatus: handling?.handlingStatus,
+      };
+    });
   },
 
   getStatusCounts() {

@@ -14,6 +14,7 @@ import VehicleManagement from '@/pages/VehicleManagement'
 import DriverManagement from '@/pages/DriverManagement'
 import CustomerManagement from '@/pages/CustomerManagement'
 import RouteManagement from '@/pages/RouteManagement'
+import ExceptionHandling from '@/pages/ExceptionHandling'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
@@ -45,6 +46,7 @@ function App() {
         <Route path="drivers" element={<DriverManagement />} />
         <Route path="customers" element={<CustomerManagement />} />
         <Route path="routes" element={<RouteManagement />} />
+        <Route path="exceptions" element={<ExceptionHandling />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

@@ -17,6 +17,7 @@ import {
   LogOut,
   ChevronDown,
   Thermometer,
+  AlertTriangle,
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { formatUserRole } from '@/utils/format'
@@ -25,6 +26,7 @@ import clsx from 'clsx'
 const menuItems = [
   { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
   { path: '/temperature-zone', label: '温区看板', icon: Thermometer },
+  { path: '/exceptions', label: '异常处理', icon: AlertTriangle },
   { path: '/orders', label: '订单管理', icon: Package },
   { path: '/warehouse', label: '入仓登记', icon: Archive },
   { path: '/dispatch', label: '调度中心', icon: ClipboardList },
