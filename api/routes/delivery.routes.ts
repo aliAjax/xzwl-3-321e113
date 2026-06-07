@@ -8,6 +8,7 @@ const router = Router();
 router.get('/tasks/driver/:driverId?', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), deliveryController.getDriverTasks);
 router.get('/tasks/:taskId/nodes', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), deliveryController.getTaskNodes);
 router.get('/tasks/:taskId', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), deliveryController.getTaskById);
+router.get('/nodes/:nodeId', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), deliveryController.getNodeById);
 router.post('/tasks/:taskId/nodes', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), deliveryController.createNode);
 router.post('/tasks/:taskId/complete', authMiddleware, requireRoles('driver'), deliveryController.completeTask);
 router.post('/nodes/:id/update', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), deliveryController.updateNode);

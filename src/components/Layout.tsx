@@ -43,7 +43,7 @@ const menuItems: MenuItem[] = [
   { path: '/warehouse', label: '入仓登记', icon: Archive, roles: ['admin', 'dispatcher'] },
   { path: '/dispatch', label: '调度中心', icon: ClipboardList, roles: ['admin', 'dispatcher'] },
   { path: '/loading', label: '装车管理', icon: Warehouse, roles: ['admin', 'dispatcher'] },
-  { path: '/delivery', label: '配送执行', icon: MapPin, roles: ['admin', 'dispatcher', 'driver'] },
+  { path: '/delivery', label: '配送执行', icon: MapPin, roles: ['admin', 'dispatcher'] },
   { path: '/vehicles', label: '车辆管理', icon: Truck, roles: ['admin', 'dispatcher'] },
   { path: '/drivers', label: '司机管理', icon: Users, roles: ['admin', 'dispatcher'] },
   { path: '/customers', label: '客户管理', icon: Building2, roles: ['admin', 'dispatcher'] },

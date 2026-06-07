@@ -14,7 +14,7 @@ console.log('开始插入初始数据...');
 
 const insertUser = db.prepare(`
   INSERT OR REPLACE INTO users (id, username, password_hash, role, name, phone, driver_id)
-  VALUES (?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
 const insertCustomer = db.prepare(`
@@ -44,8 +44,8 @@ const insertOrder = db.prepare(`
 
 const pwdHash = hashPassword('123456');
 
-insertUser.run('u-admin-001', 'admin', pwdHash, 'admin', '系统管理员', '13800000000');
-insertUser.run('u-dispatch-001', 'dispatcher', pwdHash, 'dispatcher', '张调度', '13800000001');
+insertUser.run('u-admin-001', 'admin', pwdHash, 'admin', '系统管理员', '13800000000', null);
+insertUser.run('u-dispatch-001', 'dispatcher', pwdHash, 'dispatcher', '张调度', '13800000001', null);
 insertUser.run('u-driver-001', 'driver1', pwdHash, 'driver', '李司机', '13800000002', 'drv-001');
 console.log('✓ 用户数据插入完成');
 

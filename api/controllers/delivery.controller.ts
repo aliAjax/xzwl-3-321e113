@@ -83,7 +83,16 @@ export const deliveryController = {
       }
 
       const tasks = await deliveryService.getDriverTasks(driverId);
-      return res.status(200).json(tasks);
+      const tasksWithDetails = tasks.map((task) => {
+        deliveryService.createDeliveryNodesForTask(task.id, req.user as User);
+        const detail = deliveryService.getTaskById(task.id) || task;
+        return {
+          ...detail,
+          nodes: deliveryService.getTaskNodes(task.id),
+        };
+      });
+
+      return res.status(200).json(tasksWithDetails);
     } catch (error) {
       return res.status(500).json({ message: '获取司机任务失败', error: (error as Error).message });
     }

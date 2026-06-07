@@ -143,7 +143,7 @@ function App() {
         <Route
           path="delivery"
           element={
-            <RoleRoute allowedRoles={['admin', 'dispatcher', 'driver']}>
+            <RoleRoute allowedRoles={['admin', 'dispatcher']}>
               <Delivery />
             </RoleRoute>
           }
