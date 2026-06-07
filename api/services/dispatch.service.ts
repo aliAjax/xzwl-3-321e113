@@ -407,71 +407,57 @@ export const dispatchService = {
     const conflicts: DispatchPreviewConflict[] = [];
     const suggestions: DispatchPreviewSuggestion[] = [];
     const warnings: string[] = [];
-    let canDispatch = true;
+
+    const validation = this.validateDispatchRequest(request);
+    const canDispatch = validation.valid;
+
+    const errorMessageMap: Record<string, { type: DispatchPreviewConflict['type']; severity: 'error' | 'warning' }> = {
+      '订单不存在': { type: 'order', severity: 'error' },
+      '部分订单不存在': { type: 'order', severity: 'error' },
+      '订单状态': { type: 'order', severity: 'error' },
+      '车辆不存在': { type: 'vehicle', severity: 'error' },
+      '入仓专用车辆': { type: 'vehicle', severity: 'error' },
+      '车辆状态': { type: 'vehicle', severity: 'error' },
+      '温区不匹配': { type: 'temperature', severity: 'error' },
+      '载重不足': { type: 'capacity', severity: 'error' },
+      '不可用时间': { type: 'time', severity: 'error' },
+      '已有批次': { type: 'vehicle', severity: 'error' },
+      '已有调度任务': { type: 'vehicle', severity: 'error' },
+      '司机不存在': { type: 'driver', severity: 'error' },
+      '入仓专用司机': { type: 'driver', severity: 'error' },
+      '司机状态': { type: 'driver', severity: 'error' },
+      '已有配送任务': { type: 'driver', severity: 'error' },
+      '线路不存在': { type: 'route', severity: 'error' },
+      '至少选择一个订单': { type: 'order', severity: 'error' },
+    };
+
+    function getConflictType(message: string): { type: DispatchPreviewConflict['type']; severity: 'error' | 'warning' } {
+      for (const [key, value] of Object.entries(errorMessageMap)) {
+        if (message.includes(key)) {
+          return value;
+        }
+      }
+      return { type: 'order', severity: 'error' };
+    }
+
+    for (const error of validation.errors) {
+      const { type, severity } = getConflictType(error);
+      conflicts.push({ type, severity, message: error });
+    }
 
     const orders = request.orderIds
       .map(id => orderRepository.findByIdWithCustomer(id))
       .filter((o): o is Order => o !== undefined);
 
-    const invalidOrderIds = request.orderIds.filter(
-      id => !orders.find(o => o.id === id)
-    );
-    if (invalidOrderIds.length > 0) {
-      conflicts.push({
-        type: 'order',
-        severity: 'error',
-        message: `以下订单不存在：${invalidOrderIds.join(', ')}`,
-      });
-      canDispatch = false;
-    }
-
-    const invalidStatusOrders = orders.filter(
-      o => !['created', 'warehoused'].includes(o.status)
-    );
-    if (invalidStatusOrders.length > 0) {
-      conflicts.push({
-        type: 'order',
-        severity: 'error',
-        message: `以下订单状态不正确，需要为 created 或 warehoused：${invalidStatusOrders.map(o => o.orderNo).join(', ')}`,
-      });
-      canDispatch = false;
-    }
-
     const vehicle = vehicleRepository.findById(request.vehicleId);
-    if (!vehicle) {
-      conflicts.push({
-        type: 'vehicle',
-        severity: 'error',
-        message: '车辆不存在',
-      });
-      canDispatch = false;
-    } else {
-      if (vehicle.id === WAREHOUSE_VEHICLE_ID) {
-        conflicts.push({
-          type: 'vehicle',
-          severity: 'error',
-          message: '不能使用入仓专用车辆进行正式调度',
-        });
-        canDispatch = false;
-      }
-      if (vehicle.status !== 'active') {
-        conflicts.push({
-          type: 'vehicle',
-          severity: 'error',
-          message: `车辆状态为 ${vehicle.status}，不可调度`,
-        });
-        canDispatch = false;
-      }
+    const driver = driverRepository.findById(request.driverId);
+    const route = routeRepository.findById(request.routeId);
 
+    if (vehicle && orders.length > 0) {
       const requiredZones = [...new Set(orders.map(o => o.temperatureZone))];
-      if (!this.checkTemperatureMatch(vehicle, requiredZones)) {
-        conflicts.push({
-          type: 'temperature',
-          severity: 'error',
-          message: `车辆温区不匹配，需要 ${requiredZones.join(', ')}，车辆只有 ${vehicle.temperatureZones.join(', ')}`,
-        });
-        canDispatch = false;
+      const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
 
+      if (!this.checkTemperatureMatch(vehicle, requiredZones)) {
         const altVehicles = vehicleRepository
           .findByStatus('active')
           .filter(v =>
@@ -488,15 +474,7 @@ export const dispatchService = {
         }
       }
 
-      const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
       if (vehicle.capacity < totalWeight) {
-        conflicts.push({
-          type: 'capacity',
-          severity: 'error',
-          message: `车辆载重不足，需要 ${totalWeight}kg，车辆容量 ${vehicle.capacity}kg`,
-        });
-        canDispatch = false;
-
         const largerVehicles = vehicleRepository
           .findByStatus('active')
           .filter(v =>
@@ -521,102 +499,38 @@ export const dispatchService = {
       }
 
       if (!this.checkVehicleAvailableTime(vehicle, request.scheduledDepartureTime)) {
-        conflicts.push({
-          type: 'time',
-          severity: 'error',
-          message: `车辆不可用时间：${vehicle.availableStartTime}-${vehicle.availableEndTime}`,
-        });
-        canDispatch = false;
-
         suggestions.push({
           type: 'adjust_time',
           priority: 4,
           message: `请将发车时间调整至车辆可用时段 ${vehicle.availableStartTime}-${vehicle.availableEndTime} 内`,
         });
       }
-
-      const vehicleConflicts = this.checkVehicleTimeConflicts(vehicle.id, request.scheduledDepartureTime);
-      if (vehicleConflicts.length > 0) {
-        vehicleConflicts.forEach(c => {
-          conflicts.push({
-            type: 'vehicle',
-            severity: 'warning',
-            message: c,
-          });
-        });
-        warnings.push(`车辆在 ${new Date(request.scheduledDepartureTime).toDateString()} 已有调度任务`);
-      }
     }
 
-    const driver = driverRepository.findById(request.driverId);
-    if (!driver) {
-      conflicts.push({
-        type: 'driver',
-        severity: 'error',
-        message: '司机不存在',
-      });
-      canDispatch = false;
-    } else {
-      if (driver.id === WAREHOUSE_DRIVER_ID) {
-        conflicts.push({
-          type: 'driver',
-          severity: 'error',
-          message: '不能使用入仓专用司机进行正式调度',
-        });
-        canDispatch = false;
-      }
-      if (driver.status !== 'on_duty') {
-        conflicts.push({
-          type: 'driver',
-          severity: 'error',
-          message: `司机状态为 ${driver.status}，不可调度`,
-        });
-        canDispatch = false;
-
-        const altDrivers = driverRepository.findByStatus('on_duty').filter(
-          d => d.id !== WAREHOUSE_DRIVER_ID
-        );
-        if (altDrivers.length > 0) {
-          suggestions.push({
-            type: 'alternative_driver',
-            priority: 5,
-            message: `推荐以下在岗司机：${altDrivers.map(d => d.name).join(', ')}`,
-            details: { driverIds: altDrivers.map(d => d.id) },
-          });
-        }
-      }
-
-      const driverConflicts = this.checkDriverTimeConflicts(driver.id, request.scheduledDepartureTime);
-      if (driverConflicts.length > 0) {
-        driverConflicts.forEach(c => {
-          conflicts.push({
-            type: 'driver',
-            severity: 'warning',
-            message: c,
-          });
-        });
-        warnings.push(`司机在 ${new Date(request.scheduledDepartureTime).toDateString()} 已有配送任务`);
-      }
-
-      if (vehicle && vehicle.driverId && vehicle.driverId !== driver.id) {
+    if (driver && driver.status !== 'on_duty') {
+      const altDrivers = driverRepository.findByStatus('on_duty').filter(
+        d => d.id !== WAREHOUSE_DRIVER_ID
+      );
+      if (altDrivers.length > 0) {
         suggestions.push({
           type: 'alternative_driver',
-          priority: 6,
-          message: `该车辆的固定司机为 ${driverRepository.findById(vehicle.driverId)?.name || '未知'}，建议优先使用固定司机`,
-          details: { driverId: vehicle.driverId },
+          priority: 5,
+          message: `推荐以下在岗司机：${altDrivers.map(d => d.name).join(', ')}`,
+          details: { driverIds: altDrivers.map(d => d.id) },
         });
       }
     }
 
-    const route = routeRepository.findById(request.routeId);
-    if (!route) {
-      conflicts.push({
-        type: 'route',
-        severity: 'error',
-        message: '线路不存在',
+    if (vehicle && driver && vehicle.driverId && vehicle.driverId !== driver.id) {
+      suggestions.push({
+        type: 'alternative_driver',
+        priority: 6,
+        message: `该车辆的固定司机为 ${driverRepository.findById(vehicle.driverId)?.name || '未知'}，建议优先使用固定司机`,
+        details: { driverId: vehicle.driverId },
       });
-      canDispatch = false;
-    } else {
+    }
+
+    if (route && orders.length > 0) {
       const orderAddresses = orders.map(o => o.deliveryAddress);
       const routeAddresses = route.stops.map(s => s.address);
       const unmatchedAddresses = orderAddresses.filter(
