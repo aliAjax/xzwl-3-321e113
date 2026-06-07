@@ -23,6 +23,7 @@ const migrations = [
     role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'dispatcher', 'driver')),
     name VARCHAR(100) NOT NULL,
     phone VARCHAR(20),
+    driver_id VARCHAR(36) REFERENCES drivers(id),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
 

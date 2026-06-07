@@ -10,6 +10,7 @@ export interface Customer {
   name: string;
   contactName: string;
   phone: string;
+  driverId?: string;
   address: string;
   priority: number;
   createdAt: string;
@@ -51,6 +52,7 @@ export interface Driver {
   id: string;
   name: string;
   phone: string;
+  driverId?: string;
   licenseNo: string;
   licenseType: string;
   status: 'on_duty' | 'off_duty' | 'on_leave';
@@ -85,6 +87,13 @@ export interface LoadingBatch {
   status: BatchStatus;
   departureTime?: string;
   createdAt: string;
+}
+
+export interface DeliveryNodeWithDetails extends DeliveryNode {
+  task?: DeliveryTask;
+  order?: Order;
+  driver?: Driver;
+  vehicle?: Vehicle;
 }
 
 export interface DeliveryNode {
@@ -123,6 +132,7 @@ export interface User {
   role: UserRole;
   name: string;
   phone: string;
+  driverId?: string;
   createdAt: string;
 }
 
@@ -212,6 +222,7 @@ export interface DispatchPreviewResult {
     id: string;
     name: string;
     phone: string;
+  driverId?: string;
     status: string;
   } | null;
   route: {

@@ -15,6 +15,7 @@ class UserRepository extends BaseRepository<UserWithPassword> {
     name: 'name',
     phone: 'phone',
     createdAt: 'created_at',
+    driverId: 'driver_id',
   };
   protected jsonFields: Array<keyof UserWithPassword> = [];
 

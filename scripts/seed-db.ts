@@ -13,7 +13,7 @@ const hashPassword = (password: string) => bcrypt.hashSync(password, 10);
 console.log('开始插入初始数据...');
 
 const insertUser = db.prepare(`
-  INSERT OR REPLACE INTO users (id, username, password_hash, role, name, phone)
+  INSERT OR REPLACE INTO users (id, username, password_hash, role, name, phone, driver_id)
   VALUES (?, ?, ?, ?, ?, ?)
 `);
 
@@ -46,7 +46,7 @@ const pwdHash = hashPassword('123456');
 
 insertUser.run('u-admin-001', 'admin', pwdHash, 'admin', '系统管理员', '13800000000');
 insertUser.run('u-dispatch-001', 'dispatcher', pwdHash, 'dispatcher', '张调度', '13800000001');
-insertUser.run('u-driver-001', 'driver1', pwdHash, 'driver', '李司机', '13800000002');
+insertUser.run('u-driver-001', 'driver1', pwdHash, 'driver', '李司机', '13800000002', 'drv-001');
 console.log('✓ 用户数据插入完成');
 
 insertCustomer.run('cust-001', '永辉超市', '王经理', '13900000001', '北京市朝阳区建国路88号', 1);

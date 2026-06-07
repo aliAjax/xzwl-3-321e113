@@ -11,6 +11,7 @@ interface UserRow {
   role: string;
   name: string;
   phone: string;
+  driver_id?: string;
   created_at: string;
 }
 
@@ -19,7 +20,7 @@ export const authService = {
     const { username, password } = loginRequest;
 
     const userRow = db.prepare(`
-      SELECT id, username, password_hash, role, name, phone, created_at
+      SELECT id, username, password_hash, role, name, phone, driver_id, created_at
       FROM users
       WHERE username = ?
     `).get(username) as UserRow | undefined;
@@ -39,6 +40,7 @@ export const authService = {
       role: userRow.role as User['role'],
       name: userRow.name,
       phone: userRow.phone,
+      driverId: userRow.driver_id,
       createdAt: userRow.created_at,
     };
 
