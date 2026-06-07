@@ -399,16 +399,16 @@ function RouteManagement() {
 
               {formData.stops.length > 0 && (
                 <div className="flex items-center justify-between text-sm text-gray-600 pt-2">
-                <span>共 {formData.stops.length} 个站点</span>
-                <span>
-                  预计总时长:{' '}
-                  {formatDuration(getTotalEstimatedTime(
-                    formData.stops.map((s, i) => ({ ...s, order: i + 1 }))
-                  ))}
-                </span>
+                  <span>共 {formData.stops.length} 个站点</span>
+                  <span>
+                    预计总时长:{' '}
+                    {formatDuration(getTotalEstimatedTime(
+                      formData.stops.map((s, i) => ({ ...s, order: i + 1 }))
+                    ))}
+                  </span>
+                </div>
+              )}
               </div>
-            )}
-            </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 mt-6">
                 <button type="button" onClick={closeModal} className="btn-secondary">
                   取消
