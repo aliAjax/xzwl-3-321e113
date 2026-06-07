@@ -10,6 +10,11 @@ import type {
 } from '../../shared/types';
 
 const ZONES: TemperatureZone[] = ['frozen', 'chilled', 'ambient'];
+const VIRTUAL_VEHICLE_TYPE = '虚拟车辆';
+
+function isRealVehicle(vehicle: { vehicleType: string; status: string }): boolean {
+  return vehicle.status === 'active' && vehicle.vehicleType !== VIRTUAL_VEHICLE_TYPE;
+}
 
 function getZoneStats(zone: TemperatureZone): TemperatureZoneStats {
   const pendingOrders = orderRepository
@@ -22,7 +27,7 @@ function getZoneStats(zone: TemperatureZone): TemperatureZoneStats {
 
   const availableVehicles = vehicleRepository
     .findByTemperatureZone(zone)
-    .filter((v) => v.status === 'active').length;
+    .filter(isRealVehicle).length;
 
   return {
     pendingOrders,
@@ -109,6 +114,6 @@ export const temperatureZoneService = {
   },
 
   getZoneVehicles(zone: TemperatureZone) {
-    return vehicleRepository.findByTemperatureZone(zone).filter((v) => v.status === 'active');
+    return vehicleRepository.findByTemperatureZone(zone).filter(isRealVehicle);
   },
 };
