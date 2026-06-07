@@ -56,6 +56,15 @@ interface ExceptionDetailResponse {
   temperatureRecords: TemperatureRecord[]
 }
 
+function getLocalDayBoundary(date: string, boundary: 'start' | 'end'): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const localDate = boundary === 'start'
+    ? new Date(year, month - 1, day, 0, 0, 0, 0)
+    : new Date(year, month - 1, day, 23, 59, 59, 999)
+
+  return localDate.toISOString()
+}
+
 function ExceptionHandling() {
   const [exceptions, setExceptions] = useState<ExceptionHandlingListResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -132,8 +141,8 @@ function ExceptionHandling() {
     setLoading(true)
     try {
       const params: ExceptionHandlingQueryParams = {}
-      if (filters.startDate) params.startDate = `${filters.startDate}T00:00:00.000Z`
-      if (filters.endDate) params.endDate = `${filters.endDate}T23:59:59.999Z`
+      if (filters.startDate) params.startDate = getLocalDayBoundary(filters.startDate, 'start')
+      if (filters.endDate) params.endDate = getLocalDayBoundary(filters.endDate, 'end')
       if (filters.temperatureZone) params.temperatureZone = filters.temperatureZone
       if (filters.driverId) params.driverId = filters.driverId
       if (filters.orderStatus) params.orderStatus = filters.orderStatus

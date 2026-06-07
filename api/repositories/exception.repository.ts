@@ -78,11 +78,11 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     const sqlParams: unknown[] = [];
 
     if (params.startDate) {
-      conditions.push('eh.exception_time >= ?');
+      conditions.push('datetime(eh.exception_time) >= datetime(?)');
       sqlParams.push(params.startDate);
     }
     if (params.endDate) {
-      conditions.push('eh.exception_time <= ?');
+      conditions.push('datetime(eh.exception_time) <= datetime(?)');
       sqlParams.push(params.endDate);
     }
     if (params.temperatureZone) {
