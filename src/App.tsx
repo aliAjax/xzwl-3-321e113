@@ -8,6 +8,7 @@ import OrderDetail from '@/pages/OrderDetail'
 import Dispatch from '@/pages/Dispatch'
 import Delivery from '@/pages/Delivery'
 import Loading from '@/pages/Loading'
+import WarehouseIn from '@/pages/WarehouseIn'
 import VehicleManagement from '@/pages/VehicleManagement'
 import DriverManagement from '@/pages/DriverManagement'
 import CustomerManagement from '@/pages/CustomerManagement'
@@ -34,6 +35,7 @@ function App() {
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="orders" element={<OrderList />} />
         <Route path="orders/:id" element={<OrderDetail />} />
+        <Route path="warehouse" element={<WarehouseIn />} />
         <Route path="dispatch" element={<Dispatch />} />
         <Route path="delivery" element={<Delivery />} />
         <Route path="loading" element={<Loading />} />

@@ -104,13 +104,13 @@ export interface DeliveryNode {
 
 export interface DeliveryTask {
   id: string;
-  batchId: string;
+  batchId?: string | null;
   batch?: LoadingBatch;
   orderId: string;
   order?: Order;
-  driverId: string;
+  driverId?: string | null;
   driver?: Driver;
-  vehicleId: string;
+  vehicleId?: string | null;
   vehicle?: Vehicle;
   status: OrderStatus;
   nodes?: DeliveryNode[];
@@ -184,6 +184,19 @@ export interface OrderTimeline {
   currentNode?: OrderTimelineEvent;
   completedCount: number;
   totalCount: number;
+}
+
+export interface WarehouseInRegisterRequest {
+  orderId: string;
+  locationText: string;
+  temperature: number;
+  remarks?: string;
+}
+
+export interface WarehouseInQueryParams {
+  orderNo?: string;
+  customerId?: string;
+  temperatureZone?: TemperatureZone;
 }
 
 export interface DashboardStats {

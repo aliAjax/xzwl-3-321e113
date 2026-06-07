@@ -224,6 +224,59 @@ class OrderRepository extends BaseRepository<Order> {
       totalCount,
     };
   }
+
+  findPendingWarehouseOrders(params: {
+    orderNo?: string;
+    customerId?: string;
+    temperatureZone?: TemperatureZone;
+  }): Order[] {
+    let sql = `SELECT o.*,
+                      c.name as customer_name,
+                      c.contact_name as customer_contact_name,
+                      c.phone as customer_phone,
+                      c.address as customer_address,
+                      c.priority as customer_priority,
+                      c.created_at as customer_created_at
+               FROM ${this.tableName} o
+               LEFT JOIN customers c ON o.customer_id = c.id
+               WHERE o.status = 'created'`;
+
+    const paramsList: unknown[] = [];
+
+    if (params.orderNo) {
+      sql += ' AND o.order_no LIKE ?';
+      paramsList.push(`%${params.orderNo}%`);
+    }
+
+    if (params.customerId) {
+      sql += ' AND o.customer_id = ?';
+      paramsList.push(params.customerId);
+    }
+
+    if (params.temperatureZone) {
+      sql += ' AND o.temperature_zone = ?';
+      paramsList.push(params.temperatureZone);
+    }
+
+    sql += ' ORDER BY o.created_at DESC';
+
+    const rows = this.db.prepare(sql).all(...paramsList) as Record<string, unknown>[];
+    return rows.map(row => {
+      const order = this.fromDatabase(row);
+      if (row.customer_name) {
+        order.customer = {
+          id: row.customer_id as string,
+          name: row.customer_name as string,
+          contactName: row.customer_contact_name as string,
+          phone: row.customer_phone as string,
+          address: row.customer_address as string,
+          priority: row.customer_priority as number,
+          createdAt: row.customer_created_at as string,
+        };
+      }
+      return order;
+    });
+  }
 }
 
 export const orderRepository = new OrderRepository();

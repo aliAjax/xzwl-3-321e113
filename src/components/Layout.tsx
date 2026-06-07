@@ -10,6 +10,7 @@ import {
   ClipboardList,
   MapPin,
   Warehouse,
+  Archive,
   Menu,
   X,
   User,
@@ -23,6 +24,7 @@ import clsx from 'clsx'
 const menuItems = [
   { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
   { path: '/orders', label: '订单管理', icon: Package },
+  { path: '/warehouse', label: '入仓登记', icon: Archive },
   { path: '/dispatch', label: '调度中心', icon: ClipboardList },
   { path: '/loading', label: '装车管理', icon: Warehouse },
   { path: '/delivery', label: '配送执行', icon: MapPin },

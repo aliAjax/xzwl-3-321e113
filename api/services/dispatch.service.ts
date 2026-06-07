@@ -4,6 +4,7 @@ import { driverRepository } from '../repositories/driver.repository';
 import { routeRepository } from '../repositories/route.repository';
 import { batchRepository } from '../repositories/batch.repository';
 import { taskRepository } from '../repositories/task.repository';
+import { nodeRepository } from '../repositories/node.repository';
 import type {
   Order,
   Vehicle,
@@ -296,21 +297,68 @@ export const dispatchService = {
 
     const tasks: DeliveryTask[] = [];
     for (const order of orders) {
-      const taskId = generateId();
+      let task: DeliveryTask | undefined;
 
-      const task = taskRepository.create({
-        id: taskId,
-        batchId,
-        orderId: order.id,
-        driverId: request.driverId,
-        vehicleId: request.vehicleId,
-        status: 'warehoused',
-        createdAt: now,
-      });
+      const existingTask = taskRepository.findByOrderId(order.id);
 
-      tasks.push(task);
+      if (existingTask) {
+        task = taskRepository.updateTask(existingTask.id, {
+          batchId,
+          driverId: request.driverId,
+          vehicleId: request.vehicleId,
+          status: 'warehoused',
+        });
 
-      orderRepository.updateStatus(order.id, 'warehoused');
+        const existingWarehouseInNode = nodeRepository.findByTaskIdAndNodeType(existingTask.id, 'warehouse_in');
+        if (!existingWarehouseInNode) {
+          const nodeId = generateId();
+          nodeRepository.createNode({
+            id: nodeId,
+            taskId: existingTask.id,
+            nodeType: 'warehouse_in',
+            nodeName: '入仓登记',
+            status: 'completed',
+            recordedAt: now,
+            locationText: '仓库',
+            operatorId: '',
+            operatorName: '系统',
+            createdAt: now,
+          });
+        }
+      } else {
+        const taskId = generateId();
+        task = taskRepository.create({
+          id: taskId,
+          batchId,
+          orderId: order.id,
+          driverId: request.driverId,
+          vehicleId: request.vehicleId,
+          status: 'warehoused',
+          createdAt: now,
+        });
+
+        const nodeId = generateId();
+        nodeRepository.createNode({
+          id: nodeId,
+          taskId: taskId,
+          nodeType: 'warehouse_in',
+          nodeName: '入仓登记',
+          status: 'completed',
+          recordedAt: now,
+          locationText: '仓库',
+          operatorId: '',
+          operatorName: '系统',
+          createdAt: now,
+        });
+      }
+
+      if (task) {
+        tasks.push(task);
+      }
+
+      if (order.status !== 'warehoused') {
+        orderRepository.updateStatus(order.id, 'warehoused');
+      }
     }
 
     return { batch, tasks };
