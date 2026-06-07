@@ -30,6 +30,19 @@ function generateId(): string {
 
 const WAREHOUSE_VEHICLE_ID = 'veh-warehouse';
 const WAREHOUSE_DRIVER_ID = 'drv-warehouse';
+const WAREHOUSE_BATCH_PREFIX = 'WH';
+
+function isWarehouseBatch(batch?: LoadingBatch): boolean {
+  return Boolean(batch?.batchNo?.startsWith(WAREHOUSE_BATCH_PREFIX));
+}
+
+function isWarehouseTask(task: DeliveryTask): boolean {
+  if (task.driverId === WAREHOUSE_DRIVER_ID || task.vehicleId === WAREHOUSE_VEHICLE_ID) {
+    return true;
+  }
+
+  return isWarehouseBatch(batchRepository.findById(task.batchId));
+}
 
 export const dispatchService = {
   checkVehicleAvailableTime(vehicle: Vehicle, scheduledTime: string): boolean {
@@ -55,7 +68,7 @@ export const dispatchService = {
     const scheduledDate = new Date(scheduledTime).toDateString();
 
     const activeBatches = batchRepository.findByVehicleId(vehicleId).filter(b =>
-      ['created', 'loading', 'departed'].includes(b.status) && b.vehicleId !== WAREHOUSE_VEHICLE_ID
+      ['created', 'loading', 'departed'].includes(b.status) && !isWarehouseBatch(b)
     );
 
     for (const batch of activeBatches) {
@@ -72,9 +85,7 @@ export const dispatchService = {
     const conflicts: string[] = [];
     const scheduledDate = new Date(scheduledTime).toDateString();
 
-    const activeTasks = taskRepository.findActiveTasksByDriverId(driverId).filter(t =>
-      t.driverId !== WAREHOUSE_DRIVER_ID
-    );
+    const activeTasks = taskRepository.findActiveTasksByDriverId(driverId).filter(t => !isWarehouseTask(t));
 
     for (const task of activeTasks) {
       const taskDate = new Date(task.createdAt).toDateString();

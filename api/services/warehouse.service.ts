@@ -36,17 +36,45 @@ function generateWarehouseBatchNo(): string {
   return `WH${dateStr}${random}`;
 }
 
+function ensureWarehouseVehicle(): Vehicle {
+  const existing = vehicleRepository.findById(WAREHOUSE_VEHICLE_ID);
+  if (existing) {
+    return existing;
+  }
+
+  return vehicleRepository.createVehicle({
+    id: WAREHOUSE_VEHICLE_ID,
+    plateNo: '入仓专用',
+    vehicleType: '虚拟车辆',
+    temperatureZones: ['frozen', 'chilled', 'ambient'],
+    capacity: 99999,
+    availableStartTime: '00:00:00',
+    availableEndTime: '23:59:59',
+    status: 'active',
+  });
+}
+
+function ensureWarehouseDriver(): Driver {
+  const existing = driverRepository.findById(WAREHOUSE_DRIVER_ID);
+  if (existing) {
+    return existing;
+  }
+
+  return driverRepository.createDriver({
+    id: WAREHOUSE_DRIVER_ID,
+    name: '入仓暂存',
+    phone: '00000000000',
+    licenseNo: '000000000000000000',
+    licenseType: 'A1',
+    status: 'on_duty',
+  });
+}
+
 function getWarehouseResources(): { vehicle: Vehicle; driver: Driver; route: Route } {
-  const vehicle = vehicleRepository.findById(WAREHOUSE_VEHICLE_ID);
-  const driver = driverRepository.findById(WAREHOUSE_DRIVER_ID);
+  const vehicle = ensureWarehouseVehicle();
+  const driver = ensureWarehouseDriver();
   const routes = routeRepository.findAll();
 
-  if (!vehicle) {
-    throw new Error('系统中没有入仓专用车辆，请联系管理员初始化数据');
-  }
-  if (!driver) {
-    throw new Error('系统中没有入仓专用司机，请联系管理员初始化数据');
-  }
   if (routes.length === 0) {
     throw new Error('系统中没有可用的路线');
   }
