@@ -25,6 +25,12 @@ const migrations = [
   
   `ALTER TABLE exception_handlings 
    ADD COLUMN is_closed BOOLEAN NOT NULL DEFAULT 0`,
+
+  `ALTER TABLE exception_handlings 
+   ADD COLUMN closed_by VARCHAR(36) REFERENCES users(id)`,
+
+  `ALTER TABLE exception_handlings 
+   ADD COLUMN closed_at DATETIME`,
   
   `CREATE TABLE IF NOT EXISTS exception_processing_notes (
     id VARCHAR(36) PRIMARY KEY,

@@ -138,6 +138,8 @@ const migrations = [
     handling_notes TEXT,
     handled_by VARCHAR(36) REFERENCES users(id),
     handled_at DATETIME,
+    closed_by VARCHAR(36) REFERENCES users(id),
+    closed_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(node_id)
