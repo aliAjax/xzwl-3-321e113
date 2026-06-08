@@ -93,8 +93,8 @@ function DispatchSandbox() {
   }
 
   async function handleGeneratePlans() {
-    if (selectedOrders.length === 0) {
-      alert('请选择要模拟的订单')
+    if (effectiveSelectedOrderIds.length === 0) {
+      alert(hasActiveFilters ? '请在筛选结果中选择要模拟的订单' : '请选择要模拟的订单')
       return
     }
 
@@ -104,7 +104,7 @@ function DispatchSandbox() {
     setShowFilteredOrders(false)
     try {
       const result = await api.post<DispatchSandboxResult>('/dispatch/sandbox/generate', {
-        orderIds: selectedOrders,
+        orderIds: effectiveSelectedOrderIds,
         scheduledDepartureTime: scheduledTime || new Date().toISOString(),
         maxPlans,
       })
@@ -127,7 +127,7 @@ function DispatchSandbox() {
     setShowDetail(true)
     try {
       const dispatchableSelectedOrders = orders
-        .filter(o => selectedOrders.includes(o.id) && ['created', 'warehoused'].includes(o.status))
+        .filter(o => effectiveSelectedOrderIds.includes(o.id) && ['created', 'warehoused'].includes(o.status))
         .map(o => o.id)
 
       const detail = await api.post<DispatchSandboxPlanDetail>('/dispatch/sandbox/detail', {
@@ -150,7 +150,7 @@ function DispatchSandbox() {
 
   function handleApplyToDispatch(plan: DispatchSandboxPlan) {
     const dispatchableSelectedOrders = orders
-      .filter(o => selectedOrders.includes(o.id) && ['created', 'warehoused'].includes(o.status))
+      .filter(o => effectiveSelectedOrderIds.includes(o.id) && ['created', 'warehoused'].includes(o.status))
       .map(o => o.id)
 
     if (dispatchableSelectedOrders.length === 0) {
@@ -192,14 +192,20 @@ function DispatchSandbox() {
 
   const selectedOrdersInFilter = filteredOrdersList.filter((o) => selectedOrders.includes(o.id))
 
+  const selectedOrdersInFilterIds = selectedOrdersInFilter.map((o) => o.id)
+
   const selectedOrdersData = orders.filter((o) => selectedOrders.includes(o.id))
 
+  const effectiveSelectedOrders = hasActiveFilters ? selectedOrdersInFilter : selectedOrdersData
+
+  const effectiveSelectedOrderIds = hasActiveFilters ? selectedOrdersInFilterIds : selectedOrders
+
   const selectedOrdersSummary = {
-    totalOrders: selectedOrdersData.length,
-    dispatchableOrders: selectedOrdersData.filter((o) => ['created', 'warehoused'].includes(o.status)).length,
-    totalWeight: selectedOrdersData.reduce((sum, o) => sum + o.weight, 0),
-    totalQuantity: selectedOrdersData.reduce((sum, o) => sum + o.quantity, 0),
-    requiredTemperatureZones: Array.from(new Set(selectedOrdersData.map((o) => o.temperatureZone))),
+    totalOrders: effectiveSelectedOrders.length,
+    dispatchableOrders: effectiveSelectedOrders.filter((o) => ['created', 'warehoused'].includes(o.status)).length,
+    totalWeight: effectiveSelectedOrders.reduce((sum, o) => sum + o.weight, 0),
+    totalQuantity: effectiveSelectedOrders.reduce((sum, o) => sum + o.quantity, 0),
+    requiredTemperatureZones: Array.from(new Set(effectiveSelectedOrders.map((o) => o.temperatureZone))),
   }
 
   function clearFilters() {
@@ -411,9 +417,14 @@ function DispatchSandbox() {
               </div>
               {hasActiveFilters && (
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
-                    筛选结果：{filteredOrdersList.length} 个订单
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">
+                      筛选结果：{filteredOrdersList.length} 个订单
+                    </span>
+                    <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                      概览和生成方案仅基于筛选结果
+                    </span>
+                  </div>
                   <button
                     onClick={clearFilters}
                     className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
@@ -749,7 +760,7 @@ function DispatchSandbox() {
 
               <button
                 onClick={handleGeneratePlans}
-                disabled={selectedOrders.length === 0 || generating}
+                disabled={effectiveSelectedOrderIds.length === 0 || generating}
                 className="w-full btn-primary flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Zap size={18} />
@@ -771,11 +782,16 @@ function DispatchSandbox() {
             </div>
           </div>
 
-          {(sandboxResult || selectedOrdersData.length > 0) && (
+          {(sandboxResult || effectiveSelectedOrders.length > 0) && (
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
                 <Layers size={16} />
                 选中订单概览
+                {hasActiveFilters && (
+                  <span className="text-xs font-normal text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                    筛选结果中
+                  </span>
+                )}
               </h3>
               <div className="space-y-3">
                 <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
