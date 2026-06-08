@@ -9,6 +9,8 @@ import type {
   NodeStatus,
   OrderStatus,
   NodeUpdateRequest,
+  NodeUpdateResponse,
+  ConflictType,
   User,
 } from '../../shared/types';
 
@@ -159,27 +161,62 @@ export const deliveryService = {
     nodeId: string,
     request: NodeUpdateRequest,
     operator: User
-  ): DeliveryNode | undefined {
+  ): NodeUpdateResponse {
     const node = nodeRepository.findById(nodeId);
     if (!node) {
-      return undefined;
+      return { success: false };
+    }
+
+    if (request.clientSubmitId) {
+      const existingNode = nodeRepository.findByClientSubmitId(request.clientSubmitId);
+      if (existingNode) {
+        return {
+          success: true,
+          node: existingNode,
+          isDuplicate: true,
+        };
+      }
     }
 
     if (node.status === 'completed') {
-      throw new Error('节点已完成，无法更新');
+      return {
+        success: false,
+        conflict: {
+          type: 'already_completed',
+          message: '该节点已完成，无法重复提交',
+          currentNode: node,
+          submittedData: request,
+        },
+      };
+    }
+
+    if (request.updatedAt && node.updatedAt > request.updatedAt) {
+      return {
+        success: false,
+        conflict: {
+          type: 'updated_by_other',
+          message: '该节点已被后台或其他方式更新，请刷新后重试',
+          currentNode: node,
+          submittedData: request,
+        },
+      };
     }
 
     const updatedNode = nodeRepository.completeNode(nodeId, {
       locationText: request.locationText,
       temperature: request.temperature,
       exceptionDescription: request.exceptionDescription,
+      clientSubmitId: request.clientSubmitId,
     });
 
     if (updatedNode) {
       this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
     }
 
-    return updatedNode;
+    return {
+      success: true,
+      node: updatedNode,
+    };
   },
 
   startNode(nodeId: string, operator: User): DeliveryNode | undefined {

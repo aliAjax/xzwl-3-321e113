@@ -76,7 +76,7 @@ class ApiClient {
 
       const result = await response.json()
 
-      if (!response.ok) {
+      if (!response.ok && response.status !== 409) {
         throw new ApiError(
           result.message || result.error || `请求失败: ${response.status}`,
           response.status,

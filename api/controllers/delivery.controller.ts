@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { deliveryService } from '../services/delivery.service';
 import { nodeRepository } from '../repositories/node.repository';
 import db from '../db';
-import type { NodeUpdateRequest, NodeType, User } from '../../shared/types';
+import type { NodeUpdateRequest, NodeType, NodeUpdateResponse, User } from '../../shared/types';
 
 function getNodeWithDetails(nodeId: string): any {
   const row = db
@@ -174,14 +174,35 @@ export const deliveryController = {
         nodeId,
         request,
         req.user as User
-      );
+      ) as NodeUpdateResponse;
 
-      if (!result) {
+      if (!result.success && !result.conflict) {
         return res.status(404).json({ message: '节点不存在' });
       }
 
+      if (result.conflict) {
+        return res.status(409).json({
+          success: false,
+          conflict: result.conflict,
+          message: result.conflict.message,
+        });
+      }
+
+      if (result.isDuplicate) {
+        const nodeWithDetails = getNodeWithDetails(nodeId);
+        return res.status(200).json({
+          success: true,
+          isDuplicate: true,
+          node: nodeWithDetails,
+          message: '重复提交，已忽略',
+        });
+      }
+
       const nodeWithDetails = getNodeWithDetails(nodeId);
-      return res.status(200).json(nodeWithDetails);
+      return res.status(200).json({
+        success: true,
+        node: nodeWithDetails,
+      });
     } catch (error) {
       return res.status(500).json({ message: '更新节点失败', error: (error as Error).message });
     }

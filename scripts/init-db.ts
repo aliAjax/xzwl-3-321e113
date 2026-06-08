@@ -121,7 +121,9 @@ const migrations = [
     temperature DECIMAL(5,2),
     operator_id VARCHAR(36) REFERENCES users(id),
     operator_name VARCHAR(100),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    client_submit_id VARCHAR(64),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
 
   `CREATE TABLE IF NOT EXISTS exception_handlings (
@@ -160,6 +162,8 @@ const indexes = [
   'CREATE INDEX IF NOT EXISTS idx_tasks_status ON delivery_tasks(status)',
   'CREATE INDEX IF NOT EXISTS idx_nodes_task ON delivery_nodes(task_id)',
   'CREATE INDEX IF NOT EXISTS idx_nodes_recorded ON delivery_nodes(recorded_at)',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_client_submit_id ON delivery_nodes(client_submit_id) WHERE client_submit_id IS NOT NULL',
+  'CREATE INDEX IF NOT EXISTS idx_nodes_updated ON delivery_nodes(updated_at)',
   'CREATE INDEX IF NOT EXISTS idx_exception_node ON exception_handlings(node_id)',
   'CREATE INDEX IF NOT EXISTS idx_exception_status ON exception_handlings(handling_status)',
   'CREATE INDEX IF NOT EXISTS idx_exception_time ON exception_handlings(exception_time)',

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   MapPin,
   Package,
@@ -21,9 +21,15 @@ import {
   Home,
   CheckCheck,
   User,
+  Wifi,
+  WifiOff,
+  Sync,
+  AlertTriangle,
+  RotateCcw,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/utils/api'
+import { offlineSync } from '@/utils/offlineSync'
 import {
   formatDateTime,
   formatOrderStatus,
@@ -31,7 +37,15 @@ import {
   formatTemperatureZone,
 } from '@/utils/format'
 import { useAuthStore } from '@/store/authStore'
-import type { DeliveryTask, DeliveryNode, NodeUpdateRequest, NodeType } from '@shared/types'
+import type {
+  DeliveryTask,
+  DeliveryNode,
+  NodeUpdateRequest,
+  NodeType,
+  SyncConflict,
+  SyncStatus,
+  OfflineSyncQueueItem,
+} from '@shared/types'
 import clsx from 'clsx'
 
 interface NodeUpdateForm {
@@ -63,6 +77,12 @@ function DriverMobile() {
   const [selectedTask, setSelectedTask] = useState<DeliveryTask | null>(null)
   const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active')
   const [copiedAddressId, setCopiedAddressId] = useState<string | null>(null)
+  const [isOnline, setIsOnline] = useState(offlineSync.getIsOnline())
+  const [syncQueue, setSyncQueue] = useState<OfflineSyncQueueItem[]>(offlineSync.getQueue())
+  const [conflicts, setConflicts] = useState<SyncConflict[]>(offlineSync.getConflicts())
+  const [showConflictModal, setShowConflictModal] = useState(false)
+  const [selectedConflict, setSelectedConflict] = useState<SyncConflict | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   const user = useAuthStore((state) => state.user)
   const logout = useAuthStore((state) => state.logout)
@@ -71,10 +91,23 @@ function DriverMobile() {
   const loadTasks = useCallback(async () => {
     try {
       const data = await api.get<DeliveryTask[]>('/delivery/tasks/driver')
-      setTasks(data)
+      const tasksWithLocalUpdates = offlineSync.applyLocalUpdatesToTasks(data)
+      setTasks(tasksWithLocalUpdates)
     } catch (error) {
       console.error('Failed to load delivery tasks:', error)
-      alert('加载任务失败，请下拉刷新重试')
+      const storedTasks = localStorage.getItem('driver-tasks-cache')
+      if (storedTasks) {
+        try {
+          const cachedTasks = JSON.parse(storedTasks)
+          const tasksWithLocalUpdates = offlineSync.applyLocalUpdatesToTasks(cachedTasks)
+          setTasks(tasksWithLocalUpdates)
+          alert('网络异常，显示缓存数据')
+        } catch {
+          alert('加载任务失败，请下拉刷新重试')
+        }
+      } else {
+        alert('加载任务失败，请下拉刷新重试')
+      }
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -83,7 +116,40 @@ function DriverMobile() {
 
   useEffect(() => {
     loadTasks()
-  }, [loadTasks])
+
+    const removeQueueListener = offlineSync.addQueueListener((queue) => {
+      setSyncQueue(queue)
+      setTasks((prev) => offlineSync.applyLocalUpdatesToTasks(prev))
+    })
+
+    const removeConflictListener = offlineSync.addConflictListener((newConflicts) => {
+      setConflicts(newConflicts)
+      if (newConflicts.length > conflicts.length) {
+        const newConflict = newConflicts[newConflicts.length - 1]
+        setSelectedConflict(newConflict)
+        setShowConflictModal(true)
+      }
+    })
+
+    const removeNetworkListener = offlineSync.addNetworkListener((online) => {
+      setIsOnline(online)
+      if (online) {
+        loadTasks()
+      }
+    })
+
+    return () => {
+      removeQueueListener()
+      removeConflictListener()
+      removeNetworkListener()
+    }
+  }, [loadTasks, conflicts.length])
+
+  useEffect(() => {
+    if (tasks.length > 0) {
+      localStorage.setItem('driver-tasks-cache', JSON.stringify(tasks))
+    }
+  }, [tasks])
 
   const handleRefresh = () => {
     setRefreshing(true)
@@ -165,7 +231,7 @@ function DriverMobile() {
   }
 
   const handleUpdateNode = async () => {
-    if (!updateForm) return
+    if (!updateForm || submitting) return
 
     if (!updateForm.locationText.trim()) {
       alert('请输入位置信息')
@@ -177,25 +243,81 @@ function DriverMobile() {
       return
     }
 
+    setSubmitting(true)
+
     try {
       const request: NodeUpdateRequest = {
         status: updateForm.status,
         locationText: updateForm.locationText,
         exceptionDescription: updateForm.status === 'exception' ? updateForm.exceptionDescription : undefined,
         temperature: updateForm.temperature ? parseFloat(updateForm.temperature) : undefined,
+        clientSubmitId: offlineSync.generateClientSubmitId(),
+        updatedAt: new Date().toISOString(),
       }
 
-      await api.patch(`/delivery/nodes/${updateForm.nodeId}`, request)
+      const task = tasks.find((t) => t.id === updateForm.taskId)
+      const node = task?.nodes?.find((n) => n.id === updateForm.nodeId)
+
+      if (task && node) {
+        offlineSync.addToQueue(
+          updateForm.nodeId,
+          updateForm.taskId,
+          node.nodeType,
+          request
+        )
+      }
 
       setShowUpdateModal(false)
       setUpdateForm(null)
       setSelectedTask(null)
-      loadTasks()
+
+      if (!isOnline) {
+        alert('当前网络不佳，已保存到待同步队列，网络恢复后自动提交')
+      }
     } catch (error) {
       console.error('Failed to update node:', error)
       alert(error instanceof Error ? error.message : '更新失败')
+    } finally {
+      setSubmitting(false)
     }
   }
+
+  const getNodeSyncStatus = (nodeId: string): SyncStatus | undefined => {
+    return offlineSync.getNodeSyncStatus(nodeId)
+  }
+
+  const getSyncStatusLabel = (status: SyncStatus): { label: string; color: string; icon: typeof Sync } => {
+    const statusMap: Record<SyncStatus, { label: string; color: string; icon: typeof Sync }> = {
+      pending: { label: '待同步', color: 'text-yellow-600 bg-yellow-50', icon: Clock },
+      syncing: { label: '同步中', color: 'text-blue-600 bg-blue-50', icon: Sync },
+      failed: { label: '同步失败', color: 'text-red-600 bg-red-50', icon: AlertTriangle },
+      conflict: { label: '有冲突', color: 'text-orange-600 bg-orange-50', icon: AlertCircle },
+      synced: { label: '已同步', color: 'text-green-600 bg-green-50', icon: Check },
+    }
+    return statusMap[status]
+  }
+
+  const handleRetryFailed = () => {
+    offlineSync.retryFailedItems()
+    alert('正在重试同步失败的项目...')
+  }
+
+  const handleResolveConflict = (conflict: SyncConflict, resolution: 'accept_server' | 'force_update') => {
+    offlineSync.resolveConflict(conflict.clientSubmitId, resolution)
+    setShowConflictModal(false)
+    setSelectedConflict(null)
+    if (resolution === 'accept_server') {
+      loadTasks()
+    }
+  }
+
+  const pendingCount = useMemo(() => {
+    return syncQueue.filter((item) => item.status !== 'synced').length
+  }, [syncQueue])
+
+  const failedCount = useMemo(() => {
+    return syncQueue.filter((item) => item.status === 'failed').length
+  }, [syncQueue])
 
   const getLocation = () => {
     if ('geolocation' in navigator) {
@@ -465,6 +587,7 @@ function DriverMobile() {
                   const isCompleted = node.status === 'completed'
                   const isException = node.status === 'exception'
                   const isPending = node.status === 'pending'
+                  const syncStatus = getNodeSyncStatus(node.id)
 
                   return (
                     <div key={node.id} className="flex items-start gap-3">
@@ -475,13 +598,16 @@ function DriverMobile() {
                             isActive && 'bg-blue-500 ring-4 ring-blue-100',
                             isCompleted && 'bg-green-500',
                             isException && 'bg-red-500',
-                            isPending && 'bg-gray-300'
+                            isPending && 'bg-gray-300',
+                            syncStatus === 'syncing' && 'animate-pulse'
                           )}
                         >
                           {isCompleted ? (
                             <CheckCircle size={14} className="text-white" />
                           ) : isException ? (
                             <AlertCircle size={14} className="text-white" />
+                          ) : syncStatus === 'syncing' ? (
+                            <Sync size={14} className="text-white animate-spin" />
                           ) : (
                             <span className="text-white text-xs font-medium">
                               {index + 1}
@@ -498,17 +624,32 @@ function DriverMobile() {
                         )}
                       </div>
                       <div className="flex-1 pb-4">
-                        <p
-                          className={clsx(
-                            'text-sm font-medium',
-                            isActive && 'text-blue-700',
-                            isCompleted && 'text-green-700',
-                            isException && 'text-red-700',
-                            isPending && 'text-gray-500'
-                          )}
-                        >
-                          {NODE_LABELS[node.nodeType]?.label || node.nodeName}
-                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p
+                            className={clsx(
+                              'text-sm font-medium',
+                              isActive && 'text-blue-700',
+                              isCompleted && 'text-green-700',
+                              isException && 'text-red-700',
+                              isPending && 'text-gray-500'
+                            )}
+                          >
+                            {NODE_LABELS[node.nodeType]?.label || node.nodeName}
+                          </p>
+                          {syncStatus && (() => {
+                            const statusInfo = getSyncStatusLabel(syncStatus)
+                            const StatusIcon = statusInfo.icon
+                            return (
+                              <span className={clsx(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
+                                statusInfo.color
+                              )}>
+                                <StatusIcon size={10} />
+                                {statusInfo.label}
+                              </span>
+                            )
+                          })()}
+                        </div>
                         {node.recordedAt && (
                           <p className="text-xs text-gray-500 mt-0.5">
                             {formatDateTime(node.recordedAt)}
@@ -531,6 +672,18 @@ function DriverMobile() {
                             <AlertCircle size={10} />
                             {node.exceptionDescription}
                           </p>
+                        )}
+                        {syncStatus === 'failed' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRetryFailed()
+                            }}
+                            className="text-xs text-red-600 mt-1 flex items-center gap-1 hover:underline"
+                          >
+                            <RotateCcw size={10} />
+                            点击重试
+                          </button>
                         )}
                       </div>
                     </div>
@@ -575,6 +728,39 @@ function DriverMobile() {
   return (
     <div className="min-h-screen bg-gray-50 max-w-lg mx-auto">
       <header className="bg-gradient-to-r from-[#1e3a5f] to-[#2563eb] text-white sticky top-0 z-40 shadow-lg">
+        {!isOnline && (
+          <div className="bg-yellow-500 text-yellow-900 text-center py-1.5 text-xs font-medium flex items-center justify-center gap-1">
+            <WifiOff size={12} />
+            网络已断开，操作将在恢复后自动同步
+          </div>
+        )}
+        {isOnline && pendingCount > 0 && (
+          <div className="bg-blue-500 text-white text-center py-1.5 text-xs font-medium flex items-center justify-center gap-1">
+            <Sync size={12} className="animate-spin" />
+            正在同步 {pendingCount} 个待提交项目...
+          </div>
+        )}
+        {failedCount > 0 && (
+          <div
+            className="bg-red-500 text-white text-center py-1.5 text-xs font-medium flex items-center justify-center gap-1 cursor-pointer hover:bg-red-600 transition-colors"
+            onClick={handleRetryFailed}
+          >
+            <AlertTriangle size={12} />
+            {failedCount} 个项目同步失败，点击重试
+          </div>
+        )}
+        {conflicts.length > 0 && (
+          <div
+            className="bg-orange-500 text-white text-center py-1.5 text-xs font-medium flex items-center justify-center gap-1 cursor-pointer hover:bg-orange-600 transition-colors"
+            onClick={() => {
+              setSelectedConflict(conflicts[0])
+              setShowConflictModal(true)
+            }}
+          >
+            <AlertCircle size={12} />
+            {conflicts.length} 个冲突需要处理
+          </div>
+        )}
         <div className="px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -583,7 +769,16 @@ function DriverMobile() {
               </div>
               <div>
                 <h1 className="text-lg font-bold">司机任务台</h1>
-                <p className="text-xs text-blue-100">{user?.name}</p>
+                <p className="text-xs text-blue-100 flex items-center gap-1">
+                  {user?.name}
+                  <span className={clsx(
+                    'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px]',
+                    isOnline ? 'bg-green-500/30 text-green-200' : 'bg-red-500/30 text-red-200'
+                  )}>
+                    {isOnline ? <Wifi size={8} /> : <WifiOff size={8} />}
+                    {isOnline ? '在线' : '离线'}
+                  </span>
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -839,14 +1034,163 @@ function DriverMobile() {
                 </button>
                 <button
                   onClick={handleUpdateNode}
+                  disabled={submitting}
                   className={clsx(
-                    'flex-1 py-3 font-medium rounded-md transition-colors',
+                    'flex-1 py-3 font-medium rounded-md transition-colors flex items-center justify-center gap-2',
+                    submitting && 'opacity-70 cursor-not-allowed',
                     updateForm.status === 'exception'
                       ? 'bg-red-500 text-white hover:bg-red-600'
                       : 'btn-primary'
                   )}
                 >
-                  确认提交
+                  {submitting ? (
+                    <>
+                      <Sync size={16} className="animate-spin" />
+                      提交中...
+                    </>
+                  ) : (
+                    '确认提交'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConflictModal && selectedConflict && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl max-h-[85vh] overflow-y-auto animate-slide-up">
+            <div className="sticky top-0 bg-white border-b border-gray-100 px-4 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                <AlertTriangle size={20} className="text-orange-500" />
+                数据冲突
+              </h3>
+              <button
+                onClick={() => {
+                  setShowConflictModal(false)
+                  setSelectedConflict(null)
+                }}
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                <p className="text-orange-800 font-medium text-sm">
+                  {selectedConflict.message}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="text-sm font-medium text-gray-700">冲突详情</h4>
+                <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-500">节点类型</span>
+                    <span className="text-sm font-medium text-gray-800">
+                      {NODE_LABELS[selectedConflict.currentNode.nodeType]?.label || selectedConflict.currentNode.nodeName}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-500">当前状态</span>
+                    <span className={clsx(
+                      'text-sm font-medium',
+                      selectedConflict.currentNode.status === 'completed' ? 'text-green-600' :
+                      selectedConflict.currentNode.status === 'exception' ? 'text-red-600' :
+                      'text-gray-800'
+                    )}>
+                      {selectedConflict.currentNode.status === 'completed' ? '已完成' :
+                       selectedConflict.currentNode.status === 'exception' ? '异常' :
+                       selectedConflict.currentNode.status === 'in_progress' ? '进行中' : '待处理'}
+                    </span>
+                  </div>
+                  {selectedConflict.currentNode.recordedAt && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">更新时间</span>
+                      <span className="text-sm text-gray-800">
+                        {formatDateTime(selectedConflict.currentNode.recordedAt)}
+                      </span>
+                    </div>
+                  )}
+                  {selectedConflict.currentNode.operatorName && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">操作人</span>
+                      <span className="text-sm text-gray-800">
+                        {selectedConflict.currentNode.operatorName}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="text-sm font-medium text-gray-700">您提交的数据</h4>
+                <div className="bg-blue-50 rounded-xl p-4 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-500">提交状态</span>
+                    <span className="text-sm font-medium text-blue-700">
+                      {selectedConflict.submittedData.status === 'completed' ? '正常完成' : '异常'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-500">位置</span>
+                    <span className="text-sm text-gray-800">
+                      {selectedConflict.submittedData.locationText}
+                    </span>
+                  </div>
+                  {selectedConflict.submittedData.temperature !== undefined && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">温度</span>
+                      <span className="text-sm text-gray-800">
+                        {formatTemperature(selectedConflict.submittedData.temperature)}
+                      </span>
+                    </div>
+                  )}
+                  {selectedConflict.submittedData.exceptionDescription && (
+                    <div>
+                      <span className="text-sm text-gray-500">异常说明</span>
+                      <p className="text-sm text-gray-800 mt-1">
+                        {selectedConflict.submittedData.exceptionDescription}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                <p className="text-yellow-800 text-sm">
+                  <strong>说明：</strong>
+                  {selectedConflict.conflictType === 'already_completed' &&
+                    '该节点已被完成，您的提交可能是重复操作。'}
+                  {selectedConflict.conflictType === 'updated_by_other' &&
+                    '该节点已通过后台或温度导入更新，数据可能已过期。'}
+                  {selectedConflict.conflictType === 'concurrent_update' &&
+                    '有其他用户同时更新了该节点，请确认以哪份数据为准。'}
+                </p>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-white border-t border-gray-100 p-4">
+              <div className="flex gap-3">
+                <button
+                  onClick={() => handleResolveConflict(selectedConflict, 'accept_server')}
+                  className="flex-1 btn-secondary py-3 text-sm"
+                >
+                  <div className="flex items-center justify-center gap-2">
+                    <RefreshCw size={16} />
+                    以服务器为准，刷新数据
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleResolveConflict(selectedConflict, 'force_update')}
+                  className="flex-1 btn-primary py-3 text-sm"
+                >
+                  <div className="flex items-center justify-center gap-2">
+                    <Send size={16} />
+                    强制覆盖我的提交
+                  </div>
                 </button>
               </div>
             </div>

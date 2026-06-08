@@ -15,7 +15,9 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
     temperature: 'temperature',
     operatorId: 'operator_id',
     operatorName: 'operator_name',
+    clientSubmitId: 'client_submit_id',
     createdAt: 'created_at',
+    updatedAt: 'updated_at',
   };
   protected jsonFields: Array<keyof DeliveryNode> = [];
 
@@ -108,6 +110,17 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
     return rows.map(row => this.fromDatabase(row));
   }
 
+  findByClientSubmitId(clientSubmitId: string): DeliveryNode | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM ${this.tableName} 
+         WHERE client_submit_id = ? 
+         LIMIT 1`
+      )
+      .get(clientSubmitId) as Record<string, unknown> | undefined;
+    return row ? this.fromDatabase(row) : undefined;
+  }
+
   completeNode(
     id: string,
     data: {
@@ -115,10 +128,12 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
       temperature?: number;
       exceptionDescription?: string;
       recordedAt?: string;
+      clientSubmitId?: string;
     }
   ): DeliveryNode | undefined {
     const now = data.recordedAt || new Date().toISOString();
     const status: NodeStatus = data.exceptionDescription ? 'exception' : 'completed';
+    const updatedAt = new Date().toISOString();
 
     return this.update(id, {
       status,
@@ -126,11 +141,16 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
       locationText: data.locationText,
       temperature: data.temperature,
       exceptionDescription: data.exceptionDescription,
+      clientSubmitId: data.clientSubmitId,
+      updatedAt,
     });
   }
 
   updateNodeStatus(id: string, status: NodeStatus): DeliveryNode | undefined {
-    const updates: Partial<DeliveryNode> = { status };
+    const updates: Partial<DeliveryNode> = {
+      status,
+      updatedAt: new Date().toISOString(),
+    };
     if (status === 'in_progress') {
       updates.recordedAt = new Date().toISOString();
     }
@@ -162,7 +182,11 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
   }
 
   updateNode(id: string, data: Partial<Omit<DeliveryNode, 'id' | 'createdAt'>>): DeliveryNode | undefined {
-    return this.update(id, data);
+    const updates: Partial<DeliveryNode> = {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+    return this.update(id, updates);
   }
 
   mapFromDatabase(row: Record<string, unknown>): DeliveryNode {

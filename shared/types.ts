@@ -1,5 +1,7 @@
 export type TemperatureZone = 'frozen' | 'chilled' | 'ambient';
 export type OrderStatus = 'created' | 'warehoused' | 'loading' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
+export type SyncStatus = 'synced' | 'syncing' | 'pending' | 'failed' | 'conflict';
+export type ConflictType = 'already_completed' | 'updated_by_other' | 'concurrent_update';
 
 export const TEMPERATURE_ZONE_RANGES: Record<TemperatureZone, { min: number; max: number; label: string }> = {
   frozen: { min: -30, max: -10, label: '冷冻' },
@@ -141,7 +143,9 @@ export interface DeliveryNode {
   temperature?: number;
   operatorId: string;
   operatorName: string;
+  clientSubmitId?: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface DeliveryTask {
@@ -272,6 +276,47 @@ export interface NodeUpdateRequest {
   locationText: string;
   exceptionDescription?: string;
   temperature?: number;
+  clientSubmitId?: string;
+  updatedAt?: string;
+}
+
+export interface OfflineSyncQueueItem {
+  id: string;
+  clientSubmitId: string;
+  nodeId: string;
+  taskId: string;
+  nodeType: NodeType;
+  request: NodeUpdateRequest;
+  status: SyncStatus;
+  createdAt: string;
+  lastAttemptAt?: string;
+  retryCount: number;
+  errorMessage?: string;
+}
+
+export interface NodeUpdateResponse {
+  success: boolean;
+  node?: DeliveryNode;
+  isDuplicate?: boolean;
+  conflict?: {
+    type: ConflictType;
+    message: string;
+    currentNode: DeliveryNode;
+    submittedData: NodeUpdateRequest;
+  };
+}
+
+export interface SyncConflict {
+  clientSubmitId: string;
+  nodeId: string;
+  taskId: string;
+  conflictType: ConflictType;
+  message: string;
+  currentNode: DeliveryNode;
+  submittedData: NodeUpdateRequest;
+  resolved: boolean;
+  resolution?: 'accept_server' | 'force_update';
+  createdAt: string;
 }
 
 export interface OrderTimelineEvent {
