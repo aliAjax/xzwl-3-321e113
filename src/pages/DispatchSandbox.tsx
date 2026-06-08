@@ -20,6 +20,11 @@ import {
   Layers,
   Zap,
   Filter,
+  GitCompare,
+  CheckSquare,
+  Square,
+  Minus,
+  BarChart3,
 } from 'lucide-react'
 import { api } from '@/utils/api'
 import {
@@ -64,6 +69,10 @@ function DispatchSandbox() {
   const [filterTemperatureZone, setFilterTemperatureZone] = useState<TemperatureZone | ''>('')
   const [filterStatus, setFilterStatus] = useState<OrderStatus | ''>('')
   const [filterDeliveryDate, setFilterDeliveryDate] = useState<string>('')
+  const [selectedPlanIdsForCompare, setSelectedPlanIdsForCompare] = useState<string[]>([])
+  const [showCompare, setShowCompare] = useState(false)
+  const [comparePlanDetails, setComparePlanDetails] = useState<Map<string, DispatchSandboxPlanDetail>>(new Map())
+  const [loadingCompare, setLoadingCompare] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -100,6 +109,9 @@ function DispatchSandbox() {
     setSandboxResult(null)
     setFilteredOrders([])
     setShowFilteredOrders(false)
+    setSelectedPlanIdsForCompare([])
+    setShowCompare(false)
+    setComparePlanDetails(new Map())
     try {
       const result = await api.post<DispatchSandboxResult>('/dispatch/sandbox/generate', {
         orderIds: effectiveSelectedOrderIds,
@@ -165,6 +177,97 @@ function DispatchSandbox() {
       fromSandbox: 'true',
     })
     navigate(`/dispatch?${params.toString()}`)
+  }
+
+  function togglePlanCompareSelection(planId: string) {
+    setSelectedPlanIdsForCompare((prev) => {
+      if (prev.includes(planId)) {
+        return prev.filter((id) => id !== planId)
+      }
+      if (prev.length >= 3) {
+        alert('最多只能选择3个方案进行对比')
+        return prev
+      }
+      return [...prev, planId]
+    })
+  }
+
+  async function handleStartCompare() {
+    if (selectedPlanIdsForCompare.length < 2) {
+      alert('请至少选择2个方案进行对比')
+      return
+    }
+    if (selectedPlanIdsForCompare.length > 3) {
+      alert('最多只能选择3个方案进行对比')
+      return
+    }
+
+    const plansToCompare = sandboxResult?.plans.filter((p) =>
+      selectedPlanIdsForCompare.includes(p.planId)
+    ) || []
+
+    if (plansToCompare.length < 2) {
+      alert('未找到选中的方案')
+      return
+    }
+
+    setLoadingCompare(true)
+    setShowCompare(true)
+    setComparePlanDetails(new Map())
+
+    try {
+      const dispatchableSelectedOrders = orders
+        .filter(o => effectiveSelectedOrderIds.includes(o.id) && ['created', 'warehoused'].includes(o.status))
+        .map(o => o.id)
+
+      const detailsMap = new Map<string, DispatchSandboxPlanDetail>()
+
+      await Promise.all(
+        plansToCompare.map(async (plan) => {
+          try {
+            const detail = await api.post<DispatchSandboxPlanDetail>('/dispatch/sandbox/detail', {
+              orderIds: dispatchableSelectedOrders,
+              vehicleId: plan.vehicleId,
+              driverId: plan.driverId,
+              routeId: plan.routeId,
+              scheduledDepartureTime: plan.scheduledDepartureTime,
+              planId: plan.planId,
+              planName: plan.planName,
+            })
+            detailsMap.set(plan.planId, detail)
+          } catch (error) {
+            console.error(`Failed to load detail for plan ${plan.planId}:`, error)
+          }
+        })
+      )
+
+      setComparePlanDetails(detailsMap)
+    } catch (error) {
+      console.error('Start compare failed:', error)
+      alert('加载对比数据失败')
+    } finally {
+      setLoadingCompare(false)
+    }
+  }
+
+  function handleClearCompareSelection() {
+    setSelectedPlanIdsForCompare([])
+    setShowCompare(false)
+    setComparePlanDetails(new Map())
+  }
+
+  function getComparePlan(planId: string): DispatchSandboxPlan | undefined {
+    return sandboxResult?.plans.find((p) => p.planId === planId)
+  }
+
+  function getPlanCompareDetail(planId: string): DispatchSandboxPlanDetail | undefined {
+    return comparePlanDetails.get(planId)
+  }
+
+  function hasDifference(values: (string | number | boolean | undefined)[]): boolean {
+    if (values.length <= 1) return false
+    const first = values[0]
+    return values.some((v) => v !== first)
   }
 
   const filteredOrdersList = orders.filter((order) => {
@@ -536,36 +639,103 @@ function DispatchSandbox() {
           {sandboxResult && sandboxResult.plans.length > 0 && (
             <div className="card">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-                  <Layers size={20} className="text-purple-500" />
-                  可行方案 ({sandboxResult.plans.length})
-                </h2>
-                <div className="text-sm text-gray-500">
-                  按可行性和匹配度排序
+                <div className="flex items-center gap-4">
+                  <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                    <Layers size={20} className="text-purple-500" />
+                    可行方案 ({sandboxResult.plans.length})
+                  </h2>
+                  <span className="text-sm text-gray-500">
+                    按可行性和匹配度排序
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {selectedPlanIdsForCompare.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">
+                        已选择 <span className="font-semibold text-blue-600">{selectedPlanIdsForCompare.length}</span> 个方案
+                      </span>
+                      <button
+                        onClick={handleClearCompareSelection}
+                        className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                      >
+                        <XCircle size={12} />
+                        清空
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    onClick={handleStartCompare}
+                    disabled={selectedPlanIdsForCompare.length < 2 || selectedPlanIdsForCompare.length > 3}
+                    className={clsx(
+                      'flex items-center gap-2 text-sm py-1.5 px-3 rounded-lg transition-all',
+                      selectedPlanIdsForCompare.length >= 2 && selectedPlanIdsForCompare.length <= 3
+                        ? 'bg-purple-600 text-white hover:bg-purple-700'
+                        : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    )}
+                  >
+                    <GitCompare size={16} />
+                    对比方案
+                  </button>
                 </div>
               </div>
 
+              {selectedPlanIdsForCompare.length > 0 && (
+                <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <GitCompare size={16} className="text-purple-600" />
+                    <span className="text-sm text-purple-700">
+                      勾选方案卡片左上角的复选框选择 2-3 个方案进行横向对比
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sandboxResult.plans.map((plan) => (
-                  <div
-                    key={plan.planId}
-                    className={clsx(
-                      'p-4 rounded-xl border-2 transition-all',
-                      plan.canDispatch
-                        ? 'border-green-200 bg-green-50/50 hover:border-green-300'
-                        : 'border-yellow-200 bg-yellow-50/50 hover:border-yellow-300'
-                    )}
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span
+                {sandboxResult.plans.map((plan) => {
+                  const isSelectedForCompare = selectedPlanIdsForCompare.includes(plan.planId)
+                  return (
+                    <div
+                      key={plan.planId}
+                      className={clsx(
+                        'p-4 rounded-xl border-2 transition-all relative',
+                        isSelectedForCompare
+                          ? 'border-purple-400 bg-purple-50/50 ring-2 ring-purple-200'
+                          : plan.canDispatch
+                          ? 'border-green-200 bg-green-50/50 hover:border-green-300'
+                          : 'border-yellow-200 bg-yellow-50/50 hover:border-yellow-300'
+                      )}
+                    >
+                      <div className="absolute top-3 left-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlanCompareSelection(plan.planId)
+                          }}
                           className={clsx(
-                            'w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm',
-                            plan.canDispatch ? 'bg-green-500' : 'bg-yellow-500'
+                            'w-6 h-6 rounded border-2 flex items-center justify-center transition-all',
+                            isSelectedForCompare
+                              ? 'bg-purple-600 border-purple-600 text-white'
+                              : 'bg-white border-gray-300 hover:border-purple-400'
                           )}
                         >
-                          {plan.planName.replace('方案 ', '')}
-                        </span>
+                          {isSelectedForCompare ? (
+                            <CheckSquare size={14} />
+                          ) : (
+                              <Square size={14} className="opacity-0" />
+                            )}
+                        </button>
+                      </div>
+                      <div className="flex items-start justify-between mb-3 pl-8">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={clsx(
+                              'w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm',
+                              plan.canDispatch ? 'bg-green-500' : 'bg-yellow-500'
+                            )}
+                          >
+                            {plan.planName.replace('方案 ', '')}
+                          </span>
+                        </div>
                         <div>
                           <p className="font-semibold text-gray-800">{plan.planName}</p>
                           <div className="flex items-center gap-1 mt-0.5">
@@ -587,7 +757,6 @@ function DispatchSandbox() {
                           </div>
                         </div>
                       </div>
-                    </div>
 
                     <div className="space-y-2 text-sm">
                       <div className="flex items-center justify-between">
@@ -710,7 +879,8 @@ function DispatchSandbox() {
                       </button>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -1215,6 +1385,440 @@ function DispatchSandbox() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showCompare && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-[1600px] w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center">
+                    <GitCompare size={24} className="text-purple-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800">
+                      方案对比 ({selectedPlanIdsForCompare.length} 个方案)
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                      横向对比车辆、司机、线路、载重、温区、时长、冲突和建议差异
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowCompare(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XCircle size={24} />
+                </button>
+              </div>
+            </div>
+
+            {loadingCompare ? (
+              <div className="flex-1 flex items-center justify-center p-12">
+                <div className="text-center">
+                  <RefreshCw size={48} className="mx-auto text-purple-500 animate-spin mb-4" />
+                  <p className="text-gray-600">加载对比数据中...</p>
+                </div>
+              </div>
+            ) : (
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className={clsx(
+                  'grid gap-6',
+                  selectedPlanIdsForCompare.length === 2 ? 'grid-cols-2' : 'grid-cols-3'
+                )}>
+                  {selectedPlanIdsForCompare.map((planId) => {
+                    const plan = getComparePlan(planId)
+                    const detail = getPlanCompareDetail(planId)
+                    if (!plan) return null
+
+                    return (
+                      <div key={planId} className="space-y-4">
+                        <div className={clsx(
+                          'p-4 rounded-xl border-2',
+                          plan.canDispatch
+                            ? 'border-green-200 bg-green-50'
+                            : 'border-yellow-200 bg-yellow-50'
+                        )}>
+                          <div className="flex items-center gap-3 mb-2">
+                            <span
+                              className={clsx(
+                                'w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold',
+                                plan.canDispatch ? 'bg-green-500' : 'bg-yellow-500'
+                              )}
+                            >
+                              {plan.planName.replace('方案 ', '')}
+                            </span>
+                            <div>
+                              <p className="font-bold text-gray-800 text-lg">{plan.planName}</p>
+                              <div className="flex items-center gap-2">
+                                {plan.canDispatch ? (
+                                  <span className="text-xs text-green-600 flex items-center gap-1">
+                                    <CheckCircle size={12} />
+                                    可调度
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-yellow-600 flex items-center gap-1">
+                                    <AlertTriangle size={12} />
+                                    存在冲突
+                                  </span>
+                                )}
+                                <span className="text-xs text-gray-500">
+                                  匹配度 {plan.score}%
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {detail ? (
+                          <div className="space-y-4">
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                <BarChart3 size={16} className="text-blue-500" />
+                                核心指标
+                              </h4>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="bg-white rounded p-2">
+                                  <p className="text-xs text-gray-500">总重量</p>
+                                  <p className="font-bold text-gray-800">{detail.totalWeight} kg</p>
+                                </div>
+                                <div className="bg-white rounded p-2">
+                                  <p className="text-xs text-gray-500">总件数</p>
+                                  <p className="font-bold text-gray-800">{detail.totalQuantity} 件</p>
+                                </div>
+                                <div className="bg-white rounded p-2">
+                                  <p className="text-xs text-gray-500">预计耗时</p>
+                                  <p className="font-bold text-orange-600">
+                                    {formatDurationMinutes(detail.estimatedDurationMinutes)}
+                                  </p>
+                                </div>
+                                <div className="bg-white rounded p-2">
+                                  <p className="text-xs text-gray-500">容量使用</p>
+                                  <p className={clsx('font-bold', getCapacityColor(detail.vehicleCapacityPercent))}>
+                                    {detail.vehicleCapacityPercent}%
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                <Truck size={16} className="text-blue-500" />
+                                车辆信息
+                              </h4>
+                              {detail.vehicle ? (
+                                <div className="space-y-2">
+                                  <p className="font-medium text-gray-800">
+                                    {detail.vehicle.plateNo} ({detail.vehicle.vehicleType})
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    载重：{detail.vehicle.capacity}kg
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    可用时间：{detail.vehicle.availableStartTime}-{detail.vehicle.availableEndTime}
+                                  </p>
+                                  <div>
+                                    <div className="flex justify-between text-xs text-gray-500 mb-1">
+                                      <span>容量使用</span>
+                                      <span>{detail.vehicleCapacityUsed}kg / {detail.vehicle.capacity}kg</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div
+                                        className={clsx('h-2 rounded-full', getCapacityBgColor(detail.vehicleCapacityPercent))}
+                                        style={{ width: `${Math.min(detail.vehicleCapacityPercent, 100)}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {detail.vehicle.temperatureZones.map((zone) => {
+                                      const info = formatTemperatureZone(zone as TemperatureZone)
+                                      return (
+                                        <span key={zone} className={clsx('status-badge text-xs', info.color)}>
+                                          {info.label}
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="text-gray-500">未选择车辆</p>
+                              )}
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                <User size={16} className="text-blue-500" />
+                                司机信息
+                              </h4>
+                              {detail.driver ? (
+                                <div className="space-y-2">
+                                  <p className="font-medium text-gray-800">{detail.driver.name}</p>
+                                  <p className="text-sm text-gray-600">
+                                    {detail.driver.phone}
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    状态：{detail.driver.status}
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="text-gray-500">未选择司机</p>
+                              )}
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                <MapPin size={16} className="text-blue-500" />
+                                线路信息
+                              </h4>
+                              {detail.route ? (
+                                <div className="space-y-2">
+                                  <p className="font-medium text-gray-800">{detail.route.name}</p>
+                                  <p className="text-sm text-gray-600">
+                                    共 {detail.route.stopCount} 个站点
+                                  </p>
+                                  <div className="mt-2 space-y-1 max-h-24 overflow-y-auto">
+                                    {detail.route.stops.map((stop, idx) => (
+                                      <div key={idx} className="flex items-center gap-2 text-xs text-gray-600">
+                                        <span className="w-4 h-4 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
+                                          {stop.order}
+                                        </span>
+                                        <span className="truncate">{stop.address}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="text-gray-500">未选择线路</p>
+                              )}
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                <Thermometer size={16} className="text-blue-500" />
+                                温区覆盖
+                              </h4>
+                              <div className="space-y-2">
+                                <div>
+                                  <p className="text-xs text-gray-500 mb-1">订单所需温区</p>
+                                  <div className="flex flex-wrap gap-1">
+                                    {detail.temperatureZones.map((zone) => {
+                                      const info = formatTemperatureZone(zone)
+                                      const isMatch = detail.vehicle?.temperatureZones.includes(zone)
+                                      return (
+                                        <span
+                                          key={zone}
+                                          className={clsx(
+                                            'status-badge text-xs',
+                                            isMatch ? info.color : 'bg-red-100 text-red-700'
+                                          )}
+                                        >
+                                          {info.label}
+                                          {!isMatch && ' (不匹配)'}
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-gray-500 mb-1">车辆温区</p>
+                                  <div className="flex flex-wrap gap-1">
+                                    {detail.vehicle?.temperatureZones.map((zone) => {
+                                      const info = formatTemperatureZone(zone as TemperatureZone)
+                                      return (
+                                        <span key={zone} className={clsx('status-badge text-xs', info.color)}>
+                                          {info.label}
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                <Clock size={16} className="text-blue-500" />
+                                时间信息
+                              </h4>
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-gray-500 w-20">发车时间</span>
+                                  <ArrowRight size={14} className="text-gray-400" />
+                                  <span className="text-sm font-medium text-gray-800">
+                                    {formatDateTime(detail.scheduledDepartureTime)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-gray-500 w-20">预计到达</span>
+                                  <ArrowRight size={14} className="text-gray-400" />
+                                  <span className="text-sm font-medium text-gray-800">
+                                    {formatDateTime(detail.estimatedArrivalTime)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-gray-500 w-20">预计耗时</span>
+                                  <ArrowRight size={14} className="text-gray-400" />
+                                  <span className="text-sm font-medium text-orange-600">
+                                    {formatDurationMinutes(detail.estimatedDurationMinutes)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {detail.conflicts.length > 0 && (
+                              <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                  <AlertTriangle size={16} className="text-red-500" />
+                                  冲突信息 ({detail.conflicts.length})
+                                </h4>
+                                <div className="space-y-2 max-h-48 overflow-y-auto">
+                                  {detail.conflicts.map((conflict, index) => (
+                                    <div
+                                      key={index}
+                                      className={clsx(
+                                        'p-3 rounded-lg flex items-start gap-2',
+                                        conflict.severity === 'error'
+                                          ? 'bg-red-50 border border-red-200'
+                                          : 'bg-yellow-50 border border-yellow-200'
+                                      )}
+                                    >
+                                      <div
+                                        className={clsx(
+                                          'mt-0.5 flex-shrink-0',
+                                          conflict.severity === 'error' ? 'text-red-500' : 'text-yellow-600'
+                                        )}
+                                      >
+                                        {conflict.severity === 'error' ? (
+                                          <XCircle size={14} />
+                                        ) : (
+                                          <AlertTriangle size={14} />
+                                        )}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-1">
+                                          {getConflictIcon(conflict.type)}
+                                          <span
+                                            className={clsx(
+                                              'text-xs font-medium uppercase',
+                                              conflict.severity === 'error' ? 'text-red-600' : 'text-yellow-600'
+                                            )}
+                                          >
+                                            {conflict.type}
+                                          </span>
+                                        </div>
+                                        <p
+                                          className={clsx(
+                                            'text-xs mt-1',
+                                            conflict.severity === 'error' ? 'text-red-700' : 'text-yellow-700'
+                                          )}
+                                        >
+                                          {conflict.message}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {detail.warnings.length > 0 && (
+                              <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                  <AlertTriangle size={16} className="text-yellow-500" />
+                                  注意事项 ({detail.warnings.length})
+                                </h4>
+                                <div className="space-y-2 max-h-32 overflow-y-auto">
+                                  {detail.warnings.map((warning, index) => (
+                                    <div
+                                      key={index}
+                                      className="p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-700"
+                                    >
+                                      {warning}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {detail.suggestions.length > 0 && (
+                              <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                                  <Lightbulb size={16} className="text-blue-500" />
+                                  优化建议 ({detail.suggestions.length})
+                                </h4>
+                                <div className="space-y-2 max-h-48 overflow-y-auto">
+                                  {detail.suggestions.map((suggestion, index) => (
+                                    <div
+                                      key={index}
+                                      className="p-3 bg-blue-50 border border-blue-200 rounded-lg"
+                                    >
+                                      <div className="flex items-start gap-2">
+                                        <div className="text-blue-500 flex-shrink-0">
+                                          {getSuggestionIcon(suggestion.type)}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <span className="text-xs font-medium text-blue-600 uppercase">
+                                            {suggestion.type}
+                                          </span>
+                                          <p className="text-xs text-blue-700 mt-1">
+                                            {suggestion.message}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <button
+                              onClick={() => {
+                                const planData = getComparePlan(planId)
+                                if (planData) {
+                                  handleApplyToDispatch(planData)
+                                }
+                              }}
+                              className={clsx(
+                                'w-full flex items-center justify-center gap-2 py-3 rounded-lg font-medium',
+                                plan.canDispatch ? 'btn-primary' : 'btn-warning'
+                              )}
+                            >
+                              <Play size={16} />
+                              选择此方案带入正式调度
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="bg-gray-100 rounded-lg p-8 text-center">
+                            <AlertTriangle size={32} className="mx-auto text-gray-400 mb-2" />
+                            <p className="text-gray-500">加载方案详情失败</p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <BarChart3 size={16} className="text-gray-500" />
+                      <span className="text-sm text-gray-600">
+                        差异说明：高亮显示各方案之间的不同项
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setShowCompare(false)}
+                      className="btn-secondary"
+                    >
+                      关闭对比
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
