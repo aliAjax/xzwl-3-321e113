@@ -239,14 +239,14 @@ export const exceptionHandlingService = {
     return exceptionHandlingRepository.reopenHandling(id, reopenedBy);
   },
 
-  getStats() {
+  getStats(params: ExceptionHandlingQueryParams = {}) {
     exceptionHandlingRepository.syncExceptionNodes();
-    return exceptionHandlingRepository.getWorkorderStats();
+    return exceptionHandlingRepository.getWorkorderStats(params);
   },
 
-  getWorkorderStats(): ExceptionHandlingWorkorderStats {
+  getWorkorderStats(params: ExceptionHandlingQueryParams = {}): ExceptionHandlingWorkorderStats {
     exceptionHandlingRepository.syncExceptionNodes();
-    return exceptionHandlingRepository.getWorkorderStats();
+    return exceptionHandlingRepository.getWorkorderStats(params);
   },
 
   getRecentExceptionsWithHandlingStatus(limit: number = 10): Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus; isClosed?: boolean; escalationLevel?: EscalationLevel }> {

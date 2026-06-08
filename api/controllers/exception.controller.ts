@@ -276,7 +276,18 @@ export const exceptionHandlingController = {
 
   async getStats(req: Request, res: Response): Promise<Response> {
     try {
-      const stats = exceptionHandlingService.getStats();
+      const params: ExceptionHandlingQueryParams = {
+        startDate: req.query.startDate as string | undefined,
+        endDate: req.query.endDate as string | undefined,
+        temperatureZone: req.query.temperatureZone as TemperatureZone | undefined,
+        driverId: req.query.driverId as string | undefined,
+        orderStatus: req.query.orderStatus as OrderStatus | undefined,
+        handlingStatus: req.query.handlingStatus as ExceptionHandlingStatus | undefined,
+        escalationLevel: req.query.escalationLevel as EscalationLevel | undefined,
+        assigneeId: req.query.assigneeId as string | undefined,
+        isClosed: req.query.isClosed !== undefined ? req.query.isClosed === 'true' : undefined,
+      };
+      const stats = exceptionHandlingService.getStats(params);
       return res.status(200).json(stats);
     } catch (error) {
       return res.status(500).json({ message: '获取统计数据失败', error: (error as Error).message });
@@ -285,7 +296,18 @@ export const exceptionHandlingController = {
 
   async getWorkorderStats(req: Request, res: Response): Promise<Response> {
     try {
-      const stats = exceptionHandlingService.getWorkorderStats();
+      const params: ExceptionHandlingQueryParams = {
+        startDate: req.query.startDate as string | undefined,
+        endDate: req.query.endDate as string | undefined,
+        temperatureZone: req.query.temperatureZone as TemperatureZone | undefined,
+        driverId: req.query.driverId as string | undefined,
+        orderStatus: req.query.orderStatus as OrderStatus | undefined,
+        handlingStatus: req.query.handlingStatus as ExceptionHandlingStatus | undefined,
+        escalationLevel: req.query.escalationLevel as EscalationLevel | undefined,
+        assigneeId: req.query.assigneeId as string | undefined,
+        isClosed: req.query.isClosed !== undefined ? req.query.isClosed === 'true' : undefined,
+      };
+      const stats = exceptionHandlingService.getWorkorderStats(params);
       return res.status(200).json(stats);
     } catch (error) {
       return res.status(500).json({ message: '获取工单统计数据失败', error: (error as Error).message });

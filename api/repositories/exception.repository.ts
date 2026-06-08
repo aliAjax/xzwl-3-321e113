@@ -542,7 +542,7 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     };
   }
 
-  getWorkorderStats(): {
+  getWorkorderStats(params: ExceptionHandlingQueryParams = {}): {
     total: number;
     pending: number;
     resolved: number;
@@ -554,15 +554,71 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     level3: number;
     unassigned: number;
   } {
-    const total = this.countAll();
-    const pending = this.countByHandlingStatus('pending');
-    const resolved = this.countByHandlingStatus('resolved');
-    const escalated = this.countByHandlingStatus('escalated');
-    const closed = this.countByIsClosed(true);
-    const level1 = this.countByEscalationLevel('level_1');
-    const level2 = this.countByEscalationLevel('level_2');
-    const level3 = this.countByEscalationLevel('level_3');
-    const unassigned = this.countUnassigned();
+    const conditions: string[] = [];
+    const sqlParams: unknown[] = [];
+
+    if (params.startDate) {
+      conditions.push('datetime(exception_time) >= datetime(?)');
+      sqlParams.push(params.startDate);
+    }
+    if (params.endDate) {
+      conditions.push('datetime(exception_time) <= datetime(?)');
+      sqlParams.push(params.endDate);
+    }
+    if (params.temperatureZone) {
+      conditions.push('temperature_zone = ?');
+      sqlParams.push(params.temperatureZone);
+    }
+    if (params.driverId) {
+      conditions.push('driver_id = ?');
+      sqlParams.push(params.driverId);
+    }
+    if (params.handlingStatus) {
+      conditions.push('handling_status = ?');
+      sqlParams.push(params.handlingStatus);
+    }
+    if (params.escalationLevel) {
+      conditions.push('escalation_level = ?');
+      sqlParams.push(params.escalationLevel);
+    }
+    if (params.assigneeId) {
+      conditions.push('assignee_id = ?');
+      sqlParams.push(params.assigneeId);
+    }
+    if (params.isClosed !== undefined) {
+      conditions.push('is_closed = ?');
+      sqlParams.push(params.isClosed ? 1 : 0);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause}`;
+    const totalRow = this.db.prepare(countSql).get(...sqlParams) as { count: number };
+    const total = totalRow.count;
+
+    const pendingRow = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} handling_status = ?`).get(...sqlParams, 'pending') as { count: number };
+    const pending = pendingRow.count;
+
+    const resolvedRow = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} handling_status = ?`).get(...sqlParams, 'resolved') as { count: number };
+    const resolved = resolvedRow.count;
+
+    const escalatedRow = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} handling_status = ?`).get(...sqlParams, 'escalated') as { count: number };
+    const escalated = escalatedRow.count;
+
+    const closedRow = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} is_closed = ?`).get(...sqlParams, 1) as { count: number };
+    const closed = closedRow.count;
+
+    const level1Row = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} escalation_level = ?`).get(...sqlParams, 'level_1') as { count: number };
+    const level1 = level1Row.count;
+
+    const level2Row = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} escalation_level = ?`).get(...sqlParams, 'level_2') as { count: number };
+    const level2 = level2Row.count;
+
+    const level3Row = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} escalation_level = ?`).get(...sqlParams, 'level_3') as { count: number };
+    const level3 = level3Row.count;
+
+    const unassignedRow = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} assignee_id IS NULL`).get(...sqlParams) as { count: number };
+    const unassigned = unassignedRow.count;
 
     return {
       total,

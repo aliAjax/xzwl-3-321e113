@@ -24,6 +24,8 @@ import {
   Lock,
   Unlock,
   History,
+  Zap,
+  ListTodo,
 } from 'lucide-react'
 import { api } from '@/utils/api'
 import {
@@ -39,6 +41,7 @@ import {
   formatUserRole,
 } from '@/utils/format'
 import clsx from 'clsx'
+import { useAuthStore } from '@/store/authStore'
 import type {
   ExceptionHandlingWithDetails,
   ExceptionHandlingQueryParams,
@@ -55,6 +58,8 @@ import type {
   User,
   ExceptionHandlingWorkorderStats,
 } from '@shared/types'
+
+type QuickViewType = 'all' | 'my_pending' | 'high_priority_unclosed'
 
 interface TemperatureRecord {
   recordedAt: string
@@ -80,6 +85,7 @@ function getLocalDayBoundary(date: string, boundary: 'start' | 'end'): string {
 }
 
 function ExceptionHandling() {
+  const { user } = useAuthStore()
   const [exceptions, setExceptions] = useState<ExceptionHandlingListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -90,6 +96,7 @@ function ExceptionHandling() {
   const [processing, setProcessing] = useState(false)
   const [stats, setStats] = useState<ExceptionHandlingWorkorderStats | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeQuickView, setActiveQuickView] = useState<QuickViewType>('all')
 
   const [filters, setFilters] = useState<{
     startDate: string
@@ -138,6 +145,7 @@ function ExceptionHandling() {
 
   useEffect(() => {
     loadExceptions()
+    loadStats()
   }, [filters])
 
   async function loadDrivers() {
@@ -158,13 +166,71 @@ function ExceptionHandling() {
     }
   }
 
-  async function loadStats() {
+  async function loadStats(overrideFilters?: Partial<typeof filters>) {
     try {
-      const data = await api.get<ExceptionHandlingWorkorderStats>('/exceptions/workorder-stats')
+      const currentFilters = overrideFilters || filters
+      const params: Record<string, string> = {}
+      if (currentFilters.startDate) params.startDate = getLocalDayBoundary(currentFilters.startDate, 'start')
+      if (currentFilters.endDate) params.endDate = getLocalDayBoundary(currentFilters.endDate, 'end')
+      if (currentFilters.temperatureZone) params.temperatureZone = currentFilters.temperatureZone
+      if (currentFilters.driverId) params.driverId = currentFilters.driverId
+      if (currentFilters.orderStatus) params.orderStatus = currentFilters.orderStatus
+      if (currentFilters.handlingStatus) params.handlingStatus = currentFilters.handlingStatus
+      if (currentFilters.escalationLevel) params.escalationLevel = currentFilters.escalationLevel
+      if (currentFilters.assigneeId) params.assigneeId = currentFilters.assigneeId
+      if (currentFilters.isClosed !== '') params.isClosed = currentFilters.isClosed as string
+
+      const queryString = new URLSearchParams(params).toString()
+      const data = await api.get<ExceptionHandlingWorkorderStats>(`/exceptions/workorder-stats?${queryString}`)
       setStats(data)
     } catch (error) {
       console.error('Failed to load stats:', error)
     }
+  }
+
+  function applyQuickView(view: QuickViewType) {
+    setActiveQuickView(view)
+
+    const baseFilters: typeof filters = {
+      startDate: '',
+      endDate: '',
+      temperatureZone: '',
+      driverId: '',
+      orderStatus: '',
+      handlingStatus: '',
+      escalationLevel: '',
+      assigneeId: '',
+      isClosed: '',
+      page: 1,
+      pageSize: 20,
+    }
+
+    let newFilters = { ...baseFilters }
+
+    if (view === 'my_pending') {
+      newFilters = {
+        ...baseFilters,
+        assigneeId: user?.id || '',
+        handlingStatus: 'pending',
+        isClosed: 'false',
+      }
+    } else if (view === 'high_priority_unclosed') {
+      newFilters = {
+        ...baseFilters,
+        escalationLevel: 'level_3',
+        isClosed: 'false',
+      }
+    }
+
+    setFilters(newFilters)
+    loadStats(newFilters)
+  }
+
+  function updateFilters(updates: Partial<typeof filters>) {
+    if (activeQuickView !== 'all') {
+      setActiveQuickView('all')
+    }
+    setFilters({ ...filters, ...updates })
   }
 
   async function syncExceptions() {
@@ -249,7 +315,7 @@ function ExceptionHandling() {
     try {
       await api.put(`/exceptions/${detailId}`, handleForm)
       await loadExceptions()
-      await loadStats()
+      await loadStats(filters)
       await loadDetail(detailId)
       alert('处理成功')
     } catch (error) {
@@ -328,7 +394,7 @@ function ExceptionHandling() {
     try {
       await api.post(`/exceptions/${detailId}/close`, closeForm)
       await loadExceptions()
-      await loadStats()
+      await loadStats(filters)
       await loadDetail(detailId)
       setCloseForm({ handlingResult: 'recovered', note: '' })
       alert('关闭成功')
@@ -350,7 +416,7 @@ function ExceptionHandling() {
     try {
       await api.post(`/exceptions/${detailId}/reopen`, reopenForm)
       await loadExceptions()
-      await loadStats()
+      await loadStats(filters)
       await loadDetail(detailId)
       setReopenForm({ note: '' })
       alert('重开成功')
@@ -363,7 +429,8 @@ function ExceptionHandling() {
   }
 
   function resetFilters() {
-    setFilters({
+    setActiveQuickView('all')
+    const newFilters: typeof filters = {
       startDate: '',
       endDate: '',
       temperatureZone: '',
@@ -375,7 +442,9 @@ function ExceptionHandling() {
       isClosed: '',
       page: 1,
       pageSize: 20,
-    })
+    }
+    setFilters(newFilters)
+    loadStats(newFilters)
   }
 
   const totalPages = exceptions ? Math.ceil(exceptions.total / exceptions.pageSize) : 0
@@ -461,6 +530,50 @@ function ExceptionHandling() {
 
       <div className="card">
         <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-800">快捷视图</h3>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={() => applyQuickView('all')}
+            className={clsx(
+              'px-4 py-2 rounded-lg flex items-center gap-2 transition-colors',
+              activeQuickView === 'all'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            )}
+          >
+            <ListTodo size={18} />
+            全部工单
+          </button>
+          <button
+            onClick={() => applyQuickView('my_pending')}
+            className={clsx(
+              'px-4 py-2 rounded-lg flex items-center gap-2 transition-colors',
+              activeQuickView === 'my_pending'
+                ? 'bg-yellow-600 text-white'
+                : 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100'
+            )}
+          >
+            <Clock size={18} />
+            我的待处理
+          </button>
+          <button
+            onClick={() => applyQuickView('high_priority_unclosed')}
+            className={clsx(
+              'px-4 py-2 rounded-lg flex items-center gap-2 transition-colors',
+              activeQuickView === 'high_priority_unclosed'
+                ? 'bg-red-600 text-white'
+                : 'bg-red-50 text-red-700 hover:bg-red-100'
+            )}
+          >
+            <Zap size={18} />
+            高优先级未关闭
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-gray-800">筛选条件</h3>
           <div className="flex items-center gap-2">
             <button
@@ -476,7 +589,7 @@ function ExceptionHandling() {
             <input
               type="date"
               value={filters.startDate}
-              onChange={(e) => setFilters({ ...filters, startDate: e.target.value, page: 1 })}
+              onChange={(e) => updateFilters({ startDate: e.target.value, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -485,7 +598,7 @@ function ExceptionHandling() {
             <input
               type="date"
               value={filters.endDate}
-              onChange={(e) => setFilters({ ...filters, endDate: e.target.value, page: 1 })}
+              onChange={(e) => updateFilters({ endDate: e.target.value, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -493,7 +606,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">温区</label>
             <select
               value={filters.temperatureZone}
-              onChange={(e) => setFilters({ ...filters, temperatureZone: e.target.value as any, page: 1 })}
+              onChange={(e) => updateFilters({ temperatureZone: e.target.value as any, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -506,7 +619,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">司机</label>
             <select
               value={filters.driverId}
-              onChange={(e) => setFilters({ ...filters, driverId: e.target.value, page: 1 })}
+              onChange={(e) => updateFilters({ driverId: e.target.value, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -521,7 +634,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">订单状态</label>
             <select
               value={filters.orderStatus}
-              onChange={(e) => setFilters({ ...filters, orderStatus: e.target.value as any, page: 1 })}
+              onChange={(e) => updateFilters({ orderStatus: e.target.value as any, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -538,7 +651,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">处理状态</label>
             <select
               value={filters.handlingStatus}
-              onChange={(e) => setFilters({ ...filters, handlingStatus: e.target.value as any, page: 1 })}
+              onChange={(e) => updateFilters({ handlingStatus: e.target.value as any, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -551,7 +664,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">升级级别</label>
             <select
               value={filters.escalationLevel}
-              onChange={(e) => setFilters({ ...filters, escalationLevel: e.target.value as any, page: 1 })}
+              onChange={(e) => updateFilters({ escalationLevel: e.target.value as any, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -564,7 +677,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">处理人</label>
             <select
               value={filters.assigneeId}
-              onChange={(e) => setFilters({ ...filters, assigneeId: e.target.value, page: 1 })}
+              onChange={(e) => updateFilters({ assigneeId: e.target.value, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -580,7 +693,7 @@ function ExceptionHandling() {
             <label className="block text-sm font-medium text-gray-700 mb-1">闭环状态</label>
             <select
               value={filters.isClosed}
-              onChange={(e) => setFilters({ ...filters, isClosed: e.target.value as any, page: 1 })}
+              onChange={(e) => updateFilters({ isClosed: e.target.value as any, page: 1 })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">全部</option>
@@ -591,7 +704,10 @@ function ExceptionHandling() {
         </div>
         <div className="flex items-end mt-4">
           <button
-            onClick={loadExceptions}
+            onClick={() => {
+              loadExceptions()
+              loadStats(filters)
+            }}
             className="btn btn-primary flex items-center gap-2"
           >
             <Search size={18} />
