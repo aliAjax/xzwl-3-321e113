@@ -316,6 +316,27 @@ function DispatchSandbox() {
     return counts
   }
 
+  function getConflictSignature(detail: DispatchSandboxPlanDetail): string {
+    return JSON.stringify(
+      detail.conflicts
+        .map((conflict) => `${conflict.type}|${conflict.severity}|${conflict.message}`)
+        .sort()
+    )
+  }
+
+  function formatConflictTypeCounts(detail: DispatchSandboxPlanDetail): string {
+    const counts = getConflictTypeCounts(detail)
+    const entries = Object.entries(counts)
+      .filter(([key]) => key !== 'error' && key !== 'warning')
+      .sort(([a], [b]) => a.localeCompare(b))
+
+    if (entries.length === 0) {
+      return '无冲突'
+    }
+
+    return entries.map(([type, count]) => `${type} ${count}个`).join('、')
+  }
+
   function getSuggestionTypeCounts(
     detail: DispatchSandboxPlanDetail
   ): Record<string, number> {
@@ -1510,6 +1531,8 @@ function DispatchSandbox() {
                     const diffScore = checkFieldDiff((_, p) => p.score)
 
                     const { hasDiff: diffConflictCount } = getArrayDiffCount((d) => d.conflicts)
+                    const diffConflictContent = checkFieldDiff((d) => getConflictSignature(d))
+                    const diffConflicts = diffConflictCount || diffConflictContent
                     const { hasDiff: diffWarningCount } = getArrayDiffCount((d) => d.warnings)
                     const { hasDiff: diffSuggestionCount } = getArrayDiffCount((d) => d.suggestions)
 
@@ -1880,7 +1903,7 @@ function DispatchSandbox() {
                             {detail.conflicts.length > 0 && (
                               <div className={clsx(
                                 'bg-gray-50 rounded-lg p-4 transition-all',
-                                diffConflictCount ? 'ring-2 ring-amber-300' : ''
+                                diffConflicts ? 'ring-2 ring-amber-300' : ''
                               )}>
                                 <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                   <AlertTriangle size={16} className="text-red-500" />
@@ -1888,6 +1911,11 @@ function DispatchSandbox() {
                                   {diffConflictCount && (
                                     <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
                                       数量有差异
+                                    </span>
+                                  )}
+                                  {diffConflictContent && (
+                                    <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                      内容有差异
                                     </span>
                                   )}
                                 </h4>
@@ -1938,9 +1966,9 @@ function DispatchSandbox() {
                                     </div>
                                   ))}
                                 </div>
-                                {diffConflictCount && (
+                                {diffConflicts && (
                                   <div className="mt-2 pt-2 border-t border-amber-200">
-                                    <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                                    <p className="text-[10px] text-amber-600 flex items-center gap-1 flex-wrap">
                                       <BarChart3 size={10} />
                                       各方案冲突数量：
                                       {selectedPlanIdsForCompare.map((pid, idx) => {
@@ -1953,6 +1981,21 @@ function DispatchSandbox() {
                                         )
                                       })}
                                     </p>
+                                    {diffConflictContent && (
+                                      <p className="text-[10px] text-amber-600 flex items-center gap-1 flex-wrap mt-1">
+                                        <BarChart3 size={10} />
+                                        各方案冲突类型：
+                                        {selectedPlanIdsForCompare.map((pid, idx) => {
+                                          const d = getPlanCompareDetail(pid)
+                                          return (
+                                            <span key={pid} className="ml-1">
+                                              {getComparePlan(pid)?.planName}: {d ? formatConflictTypeCounts(d) : '无冲突'}
+                                              {idx < selectedPlanIdsForCompare.length - 1 && '，'}
+                                            </span>
+                                          )
+                                        })}
+                                      </p>
+                                    )}
                                   </div>
                                 )}
                               </div>
