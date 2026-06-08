@@ -32,6 +32,7 @@ export const exceptionHandlingService = {
 
   getExceptionList(params: ExceptionHandlingQueryParams = {}): ExceptionHandlingListResponse {
     exceptionHandlingRepository.syncExceptionNodes();
+    exceptionHandlingRepository.autoEscalateOverdue();
 
     const page = params.page || 1;
     const pageSize = params.pageSize || 20;
@@ -48,6 +49,14 @@ export const exceptionHandlingService = {
       page,
       pageSize,
     };
+  },
+
+  autoEscalateOverdue(): { updated: number; alreadyLevel3: number } {
+    return exceptionHandlingRepository.autoEscalateOverdue();
+  },
+
+  updateSlaDeadline(id: string) {
+    return exceptionHandlingRepository.updateSlaDeadline(id);
   },
 
   getExceptionDetail(id: string): (ExceptionHandlingWithDetails & { processingNotes?: ExceptionProcessingNote[] }) | undefined {

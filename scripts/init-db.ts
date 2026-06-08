@@ -140,6 +140,7 @@ const migrations = [
     handled_at DATETIME,
     closed_by VARCHAR(36) REFERENCES users(id),
     closed_at DATETIME,
+    sla_deadline DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(node_id)
@@ -164,6 +165,7 @@ const indexes = [
   'CREATE INDEX IF NOT EXISTS idx_exception_time ON exception_handlings(exception_time)',
   'CREATE INDEX IF NOT EXISTS idx_exception_driver ON exception_handlings(driver_id)',
   'CREATE INDEX IF NOT EXISTS idx_exception_zone ON exception_handlings(temperature_zone)',
+  'CREATE INDEX IF NOT EXISTS idx_exception_sla_deadline ON exception_handlings(sla_deadline)',
 ];
 
 console.log('开始初始化数据库...');

@@ -39,6 +39,7 @@ import {
   formatEscalationLevel,
   formatActionType,
   formatUserRole,
+  formatSlaStatus,
 } from '@/utils/format'
 import clsx from 'clsx'
 import { useAuthStore } from '@/store/authStore'
@@ -57,6 +58,11 @@ import type {
   EscalationLevel,
   User,
   ExceptionHandlingWorkorderStats,
+  SlaStatus,
+} from '@shared/types'
+import {
+  calculateSlaStatus,
+  formatRemainingTime,
 } from '@shared/types'
 
 type QuickViewType = 'all' | 'my_pending' | 'high_priority_unclosed'
@@ -97,6 +103,7 @@ function ExceptionHandling() {
   const [stats, setStats] = useState<ExceptionHandlingWorkorderStats | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeQuickView, setActiveQuickView] = useState<QuickViewType>('all')
+  const [, setTick] = useState(0)
 
   const [filters, setFilters] = useState<{
     startDate: string
@@ -147,6 +154,13 @@ function ExceptionHandling() {
     loadExceptions()
     loadStats()
   }, [filters])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick(t => t + 1)
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [])
 
   async function loadDrivers() {
     try {
@@ -526,6 +540,36 @@ function ExceptionHandling() {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="card">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">SLA 正常</p>
+              <p className="text-xl font-bold text-green-600">{stats?.slaOnTime || 0}</p>
+            </div>
+            <span className="status-badge bg-green-100 text-green-800">正常</span>
+          </div>
+        </div>
+        <div className="card">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">SLA 即将超时</p>
+              <p className="text-xl font-bold text-yellow-600">{stats?.slaWarning || 0}</p>
+            </div>
+            <span className="status-badge bg-yellow-100 text-yellow-800">预警</span>
+          </div>
+        </div>
+        <div className="card">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">SLA 已超时</p>
+              <p className="text-xl font-bold text-red-600">{stats?.slaOverdue || 0}</p>
+            </div>
+            <span className="status-badge bg-red-100 text-red-800">超时</span>
+          </div>
+        </div>
+      </div>
+
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-gray-800">快捷视图</h3>
@@ -736,6 +780,8 @@ function ExceptionHandling() {
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">升级级别</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">处理人</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">处理状态</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">SLA 状态</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">剩余时间</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">闭环状态</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">操作</th>
                   </tr>
@@ -779,6 +825,22 @@ function ExceptionHandling() {
                         <span className={clsx('status-badge', formatHandlingStatus(item.handlingStatus).color)}>
                           {formatHandlingStatus(item.handlingStatus).label}
                         </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={clsx('status-badge', formatSlaStatus(calculateSlaStatus(item.slaDeadline, item.isClosed)).color)}>
+                          {formatSlaStatus(calculateSlaStatus(item.slaDeadline, item.isClosed)).label}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className={clsx(
+                          'text-sm font-medium',
+                          calculateSlaStatus(item.slaDeadline, item.isClosed) === 'overdue' ? 'text-red-600' :
+                          calculateSlaStatus(item.slaDeadline, item.isClosed) === 'warning' ? 'text-yellow-600' :
+                          calculateSlaStatus(item.slaDeadline, item.isClosed) === 'closed' ? 'text-gray-500' :
+                          'text-green-600'
+                        )}>
+                          {formatRemainingTime(item.slaDeadline, item.isClosed)}
+                        </div>
                       </td>
                       <td className="py-3 px-4">
                         {item.isClosed ? (
@@ -931,6 +993,35 @@ function ExceptionHandling() {
                             {formatOrderStatus(detailData.exception.order.status).label}
                           </span>
                         )}
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">SLA 状态</p>
+                        <span className={clsx('status-badge', formatSlaStatus(calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed)).color)}>
+                          {formatSlaStatus(calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed)).label}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">SLA 截止时间</p>
+                        <p className={clsx(
+                          'font-medium',
+                          calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed) === 'overdue' ? 'text-red-600' :
+                          calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed) === 'warning' ? 'text-yellow-600' :
+                          'text-gray-800'
+                        )}>
+                          {detailData.exception.slaDeadline ? formatDateTime(detailData.exception.slaDeadline) : '-'}
+                        </p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-xs text-gray-500 mb-1">剩余处理时间</p>
+                        <p className={clsx(
+                          'font-medium text-lg',
+                          calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed) === 'overdue' ? 'text-red-600' :
+                          calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed) === 'warning' ? 'text-yellow-600' :
+                          calculateSlaStatus(detailData.exception.slaDeadline, detailData.exception.isClosed) === 'closed' ? 'text-gray-500' :
+                          'text-green-600'
+                        )}>
+                          {formatRemainingTime(detailData.exception.slaDeadline, detailData.exception.isClosed)}
+                        </p>
                       </div>
                     </div>
                   </div>

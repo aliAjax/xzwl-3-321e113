@@ -18,6 +18,7 @@ router.get('/:taskId/temperature-records', exceptionHandlingController.getTemper
 router.use(requireRoles('admin', 'dispatcher'));
 
 router.get('/sync', exceptionHandlingController.syncExceptions);
+router.post('/auto-escalate', exceptionHandlingController.autoEscalateOverdue);
 router.get('/:id', exceptionHandlingController.getDetail);
 router.get('/', exceptionHandlingController.getList);
 router.post('/', exceptionHandlingController.createException);

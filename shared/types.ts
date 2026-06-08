@@ -342,6 +342,108 @@ export type ExceptionHandlingStatus = 'pending' | 'resolved' | 'escalated';
 export type ExceptionHandlingResult = 'recovered' | 'compensated' | 're_routed' | 'cancelled' | 'other';
 export type EscalationLevel = 'level_1' | 'level_2' | 'level_3';
 export type ProcessingNoteActionType = 'create' | 'assign' | 'escalate' | 'add_note' | 'update_status' | 'close' | 'reopen';
+export type SlaStatus = 'on_time' | 'warning' | 'overdue' | 'closed';
+
+export interface SlaConfig {
+  temperatureZoneMinutes: Record<TemperatureZone, number>;
+  customerPriorityMultiplier: Record<number, number>;
+  nodeTypeMinutes: Record<NodeType, number>;
+  escalationLevelMultiplier: Record<EscalationLevel, number>;
+  warningThresholdMinutes: number;
+}
+
+export const SLA_CONFIG: SlaConfig = {
+  temperatureZoneMinutes: {
+    frozen: 60,
+    chilled: 120,
+    ambient: 240,
+  },
+  customerPriorityMultiplier: {
+    1: 1.0,
+    2: 0.8,
+    3: 0.6,
+    4: 0.5,
+    5: 0.4,
+  },
+  nodeTypeMinutes: {
+    warehouse_in: 120,
+    loading: 90,
+    departure: 60,
+    arrival: 60,
+    delivery: 30,
+    signature: 30,
+  },
+  escalationLevelMultiplier: {
+    level_1: 1.0,
+    level_2: 0.7,
+    level_3: 0.5,
+  },
+  warningThresholdMinutes: 30,
+};
+
+export function calculateSlaDeadline(
+  exceptionTime: string,
+  temperatureZone: TemperatureZone,
+  customerPriority: number,
+  nodeType: NodeType,
+  escalationLevel: EscalationLevel
+): string {
+  const baseMinutes = SLA_CONFIG.nodeTypeMinutes[nodeType] + SLA_CONFIG.temperatureZoneMinutes[temperatureZone];
+  const priorityMultiplier = SLA_CONFIG.customerPriorityMultiplier[customerPriority] || 1.0;
+  const escalationMultiplier = SLA_CONFIG.escalationLevelMultiplier[escalationLevel] || 1.0;
+  const totalMinutes = baseMinutes * priorityMultiplier * escalationMultiplier;
+  
+  const deadline = new Date(exceptionTime);
+  deadline.setMinutes(deadline.getMinutes() + totalMinutes);
+  return deadline.toISOString();
+}
+
+export function calculateSlaStatus(
+  slaDeadline: string | undefined,
+  isClosed: boolean,
+  now: Date = new Date()
+): SlaStatus {
+  if (isClosed) return 'closed';
+  if (!slaDeadline) return 'on_time';
+  
+  const deadline = new Date(slaDeadline);
+  const diffMs = deadline.getTime() - now.getTime();
+  const diffMinutes = diffMs / (1000 * 60);
+  
+  if (diffMinutes < 0) return 'overdue';
+  if (diffMinutes <= SLA_CONFIG.warningThresholdMinutes) return 'warning';
+  return 'on_time';
+}
+
+export function formatRemainingTime(
+  slaDeadline: string | undefined,
+  isClosed: boolean,
+  now: Date = new Date()
+): string {
+  if (isClosed) return '已闭环';
+  if (!slaDeadline) return '-';
+  
+  const deadline = new Date(slaDeadline);
+  const diffMs = deadline.getTime() - now.getTime();
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+  
+  if (diffMinutes < 0) {
+    const overdueMinutes = Math.abs(diffMinutes);
+    if (overdueMinutes >= 60) {
+      const hours = Math.floor(overdueMinutes / 60);
+      const mins = overdueMinutes % 60;
+      return `超时 ${hours}小时${mins > 0 ? mins + '分钟' : ''}`;
+    }
+    return `超时 ${overdueMinutes}分钟`;
+  }
+  
+  if (diffMinutes >= 60) {
+    const hours = Math.floor(diffMinutes / 60);
+    const mins = diffMinutes % 60;
+    return `剩余 ${hours}小时${mins > 0 ? mins + '分钟' : ''}`;
+  }
+  return `剩余 ${diffMinutes}分钟`;
+}
 
 export interface ExceptionProcessingNote {
   id: string;
@@ -379,6 +481,7 @@ export interface ExceptionHandling {
   isClosed: boolean;
   closedAt?: string;
   closedBy?: string;
+  slaDeadline?: string;
   processingNotes?: ExceptionProcessingNote[];
   createdAt: string;
   updatedAt: string;
@@ -449,6 +552,9 @@ export interface ExceptionHandlingWorkorderStats {
   level2: number;
   level3: number;
   unassigned: number;
+  slaOnTime: number;
+  slaWarning: number;
+  slaOverdue: number;
 }
 
 export interface ExceptionHandlingListResponse {
@@ -476,6 +582,7 @@ export interface DashboardStats {
     handlingStatus?: ExceptionHandlingStatus;
     isClosed?: boolean;
     escalationLevel?: EscalationLevel;
+    slaDeadline?: string;
   }>;
   pendingExceptionCount: number;
   handledExceptionCount: number;

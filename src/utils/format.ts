@@ -10,6 +10,7 @@ import {
   ExceptionHandlingResult,
   EscalationLevel,
   ProcessingNoteActionType,
+  SlaStatus,
 } from '@shared/types'
 
 export function formatDate(date: string | Date, pattern: string = 'yyyy-MM-dd HH:mm:ss'): string {
@@ -185,4 +186,15 @@ const actionTypeMap: Record<ProcessingNoteActionType, { label: string; color: st
 
 export function formatActionType(action: ProcessingNoteActionType): { label: string; color: string } {
   return actionTypeMap[action] || { label: action, color: 'bg-gray-100 text-gray-800' }
+}
+
+const slaStatusMap: Record<SlaStatus, { label: string; color: string; icon: string }> = {
+  on_time: { label: '正常', color: 'bg-green-100 text-green-800', icon: 'check' },
+  warning: { label: '即将超时', color: 'bg-yellow-100 text-yellow-800', icon: 'clock' },
+  overdue: { label: '已超时', color: 'bg-red-100 text-red-800', icon: 'alert' },
+  closed: { label: '已闭环', color: 'bg-gray-100 text-gray-800', icon: 'lock' },
+}
+
+export function formatSlaStatus(status: SlaStatus): { label: string; color: string; icon: string } {
+  return slaStatusMap[status] || { label: status, color: 'bg-gray-100 text-gray-800', icon: 'info' }
 }

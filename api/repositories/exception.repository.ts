@@ -9,12 +9,16 @@ import type {
   OrderStatus,
   EscalationLevel,
   ExceptionProcessingNote,
+  NodeType,
+  SlaStatus,
 } from '../../shared/types';
+import { calculateSlaDeadline, calculateSlaStatus } from '../../shared/types';
 import { taskRepository } from './task.repository';
 import { nodeRepository } from './node.repository';
 import { orderRepository } from './order.repository';
 import { driverRepository } from './driver.repository';
 import { userRepository } from './user.repository';
+import { customerRepository } from './customer.repository';
 import { processingNoteRepository } from './processing-notes.repository';
 
 class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
@@ -43,6 +47,7 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     isClosed: 'is_closed',
     closedAt: 'closed_at',
     closedBy: 'closed_by',
+    slaDeadline: 'sla_deadline',
     processingNotes: 'processing_notes',
     createdAt: 'created_at',
     updatedAt: 'updated_at',
@@ -94,6 +99,150 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
 
   findByIsClosed(isClosed: boolean): ExceptionHandling[] {
     return this.findByField('isClosed', isClosed ? 1 : 0, { orderBy: 'createdAt', orderDir: 'DESC' });
+  }
+
+  calculateSlaDeadlineForHandling(handling: ExceptionHandling): string | undefined {
+    const node = nodeRepository.findById(handling.nodeId);
+    if (!node) return undefined;
+
+    const order = orderRepository.findById(handling.orderId);
+    if (!order) return undefined;
+
+    const customer = customerRepository.findById(order.customerId);
+    const customerPriority = customer?.priority || 1;
+
+    return calculateSlaDeadline(
+      handling.exceptionTime,
+      handling.temperatureZone,
+      customerPriority,
+      node.nodeType as NodeType,
+      handling.escalationLevel
+    );
+  }
+
+  updateSlaDeadline(id: string): ExceptionHandling | undefined {
+    const handling = this.findById(id);
+    if (!handling) return undefined;
+
+    const slaDeadline = this.calculateSlaDeadlineForHandling(handling);
+    return this.update(id, { slaDeadline, updatedAt: new Date().toISOString() });
+  }
+
+  getSlaStats(params: ExceptionHandlingQueryParams = {}): { slaOnTime: number; slaWarning: number; slaOverdue: number } {
+    const conditions: string[] = [];
+    const sqlParams: unknown[] = [];
+
+    if (params.startDate) {
+      conditions.push('datetime(eh.exception_time) >= datetime(?)');
+      sqlParams.push(params.startDate);
+    }
+    if (params.endDate) {
+      conditions.push('datetime(eh.exception_time) <= datetime(?)');
+      sqlParams.push(params.endDate);
+    }
+    if (params.temperatureZone) {
+      conditions.push('eh.temperature_zone = ?');
+      sqlParams.push(params.temperatureZone);
+    }
+    if (params.driverId) {
+      conditions.push('eh.driver_id = ?');
+      sqlParams.push(params.driverId);
+    }
+    if (params.handlingStatus) {
+      conditions.push('eh.handling_status = ?');
+      sqlParams.push(params.handlingStatus);
+    }
+    if (params.escalationLevel) {
+      conditions.push('eh.escalation_level = ?');
+      sqlParams.push(params.escalationLevel);
+    }
+    if (params.assigneeId) {
+      conditions.push('eh.assignee_id = ?');
+      sqlParams.push(params.assigneeId);
+    }
+    if (params.isClosed !== undefined) {
+      conditions.push('eh.is_closed = ?');
+      sqlParams.push(params.isClosed ? 1 : 0);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const sql = `
+      SELECT eh.*, o.customer_id as order_customer_id
+      FROM ${this.tableName} eh
+      LEFT JOIN orders o ON eh.order_id = o.id
+      ${whereClause}
+    `;
+
+    const rows = this.db.prepare(sql).all(...sqlParams) as Record<string, unknown>[];
+    const now = new Date();
+
+    let slaOnTime = 0;
+    let slaWarning = 0;
+    let slaOverdue = 0;
+
+    for (const row of rows) {
+      const handling = this.fromDatabase(row);
+      const status = calculateSlaStatus(handling.slaDeadline, handling.isClosed, now);
+      
+      if (status === 'on_time') slaOnTime++;
+      else if (status === 'warning') slaWarning++;
+      else if (status === 'overdue') slaOverdue++;
+    }
+
+    return { slaOnTime, slaWarning, slaOverdue };
+  }
+
+  findOverdueExceptions(): ExceptionHandling[] {
+    const now = new Date().toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM ${this.tableName} 
+         WHERE is_closed = 0 
+           AND sla_deadline IS NOT NULL 
+           AND datetime(sla_deadline) < datetime(?)
+         ORDER BY sla_deadline ASC`
+      )
+      .all(now) as Record<string, unknown>[];
+    return rows.map(row => this.fromDatabase(row));
+  }
+
+  autoEscalateOverdue(): { updated: number; alreadyLevel3: number } {
+    const overdue = this.findOverdueExceptions();
+    let updated = 0;
+    let alreadyLevel3 = 0;
+    const now = new Date().toISOString();
+
+    for (const handling of overdue) {
+      if (handling.escalationLevel === 'level_3') {
+        alreadyLevel3++;
+        continue;
+      }
+
+      const newLevel: EscalationLevel = handling.escalationLevel === 'level_1' ? 'level_2' : 'level_3';
+      
+      this.db
+        .prepare(
+          `UPDATE ${this.tableName} 
+           SET escalation_level = ?, updated_at = ?, sla_deadline = ?
+           WHERE id = ?`
+        )
+        .run(newLevel, now, this.calculateSlaDeadlineForHandling({ ...handling, escalationLevel: newLevel }), handling.id);
+
+      processingNoteRepository.addNoteWithAction(
+        handling.id,
+        'SLA超时自动升级',
+        'escalate',
+        undefined,
+        '系统',
+        handling.escalationLevel,
+        newLevel
+      );
+
+      updated++;
+    }
+
+    return { updated, alreadyLevel3 };
   }
 
   countByEscalationLevel(escalationLevel: EscalationLevel): number {
@@ -386,10 +535,31 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
 
   createHandling(data: Omit<ExceptionHandling, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; createdAt?: string; updatedAt?: string }): ExceptionHandling {
     const now = new Date().toISOString();
+    const escalationLevel = data.escalationLevel || 'level_1' as EscalationLevel;
+    
+    const tempHandling: ExceptionHandling = {
+      id: '',
+      nodeId: data.nodeId,
+      taskId: data.taskId,
+      orderId: data.orderId,
+      driverId: data.driverId,
+      temperatureZone: data.temperatureZone,
+      exceptionDescription: data.exceptionDescription,
+      exceptionTime: data.exceptionTime,
+      handlingStatus: data.handlingStatus,
+      escalationLevel,
+      isClosed: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    
+    const slaDeadline = this.calculateSlaDeadlineForHandling(tempHandling);
+    
     const dataWithTimestamps = {
-      escalationLevel: 'level_1' as EscalationLevel,
+      escalationLevel,
       isClosed: false,
       ...data,
+      slaDeadline,
       createdAt: data.createdAt || now,
       updatedAt: data.updatedAt || now,
     };
@@ -430,8 +600,15 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     escalationLevel: EscalationLevel
   ): ExceptionHandling | undefined {
     const now = new Date().toISOString();
+    const existing = this.findById(id);
+    if (!existing) return undefined;
+
+    const updatedHandling = { ...existing, escalationLevel };
+    const slaDeadline = this.calculateSlaDeadlineForHandling(updatedHandling);
+
     return this.update(id, {
       escalationLevel,
+      slaDeadline,
       updatedAt: now,
     });
   }
@@ -479,21 +656,37 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     return row.count;
   }
 
-  syncExceptionNodes(): { total: number; created: number; existing: number; skipped: number } {
+  syncExceptionNodes(): { total: number; created: number; existing: number; skipped: number; slaUpdated: number } {
     const exceptionNodes = nodeRepository.findByStatus('exception');
     let createdCount = 0;
     let existingCount = 0;
     let skippedCount = 0;
+    let slaUpdatedCount = 0;
 
     for (const node of exceptionNodes) {
       const existing = this.findByNodeId(node.id);
       if (existing) {
         existingCount++;
+        let needsUpdate = false;
+        const updates: Partial<ExceptionHandling> = {};
+
         if (!existing.escalationLevel) {
-          this.update(existing.id, {
-            escalationLevel: 'level_1',
-            isClosed: existing.handlingStatus === 'resolved' ? true : false,
-          });
+          updates.escalationLevel = 'level_1';
+          updates.isClosed = existing.handlingStatus === 'resolved' ? true : false;
+          needsUpdate = true;
+        }
+
+        if (!existing.slaDeadline) {
+          const slaDeadline = this.calculateSlaDeadlineForHandling(existing);
+          if (slaDeadline) {
+            updates.slaDeadline = slaDeadline;
+            needsUpdate = true;
+            slaUpdatedCount++;
+          }
+        }
+
+        if (needsUpdate) {
+          this.update(existing.id, updates);
         }
         continue;
       }
@@ -539,6 +732,7 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
       created: createdCount,
       existing: existingCount,
       skipped: skippedCount,
+      slaUpdated: slaUpdatedCount,
     };
   }
 
@@ -553,6 +747,9 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     level2: number;
     level3: number;
     unassigned: number;
+    slaOnTime: number;
+    slaWarning: number;
+    slaOverdue: number;
   } {
     const conditions: string[] = [];
     const sqlParams: unknown[] = [];
@@ -620,6 +817,8 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     const unassignedRow = this.db.prepare(`SELECT COUNT(*) as count FROM ${this.tableName} ${whereClause} ${conditions.length > 0 ? 'AND' : 'WHERE'} assignee_id IS NULL`).get(...sqlParams) as { count: number };
     const unassigned = unassignedRow.count;
 
+    const slaStats = this.getSlaStats(params);
+
     return {
       total,
       pending,
@@ -631,6 +830,9 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
       level2,
       level3,
       unassigned,
+      slaOnTime: slaStats.slaOnTime,
+      slaWarning: slaStats.slaWarning,
+      slaOverdue: slaStats.slaOverdue,
     };
   }
 

@@ -13,6 +13,7 @@ import type {
   ExceptionHandlingReopenRequest,
   ExceptionHandlingCreateRequest,
   EscalationLevel,
+  SlaStatus,
 } from '../../shared/types';
 
 export const exceptionHandlingController = {
@@ -364,6 +365,18 @@ export const exceptionHandlingController = {
       });
     } catch (error) {
       return res.status(500).json({ message: '查询失败', error: (error as Error).message });
+    }
+  },
+
+  async autoEscalateOverdue(req: Request, res: Response): Promise<Response> {
+    try {
+      const result = exceptionHandlingService.autoEscalateOverdue();
+      return res.status(200).json({
+        message: `自动升级完成，升级 ${result.updated} 条，已是最高级别 ${result.alreadyLevel3} 条`,
+        ...result,
+      });
+    } catch (error) {
+      return res.status(500).json({ message: '自动升级失败', error: (error as Error).message });
     }
   },
 };

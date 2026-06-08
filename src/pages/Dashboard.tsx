@@ -1,16 +1,25 @@
 import { useState, useEffect } from 'react'
 import { Package, AlertTriangle, Truck, Clock, CheckCircle, XCircle, AlertCircle, Users, Zap } from 'lucide-react'
 import { api } from '@/utils/api'
-import { formatDateTime, formatOrderStatus, formatHandlingStatus, formatEscalationLevel } from '@/utils/format'
+import { formatDateTime, formatOrderStatus, formatHandlingStatus, formatEscalationLevel, formatSlaStatus } from '@/utils/format'
 import type { DashboardStats } from '@shared/types'
+import { calculateSlaStatus, formatRemainingTime } from '@shared/types'
 import clsx from 'clsx'
 
 function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [, setTick] = useState(0)
 
   useEffect(() => {
     loadStats()
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick(t => t + 1)
+    }, 60000)
+    return () => clearInterval(interval)
   }, [])
 
   async function loadStats() {
@@ -112,6 +121,27 @@ function Dashboard() {
     {
       label: '三级异常',
       value: stats.workorderStats.level3 || 0,
+      icon: XCircle,
+      color: 'bg-red-600',
+      bgColor: 'bg-red-50',
+    },
+    {
+      label: 'SLA 正常',
+      value: stats.workorderStats.slaOnTime || 0,
+      icon: CheckCircle,
+      color: 'bg-green-500',
+      bgColor: 'bg-green-50',
+    },
+    {
+      label: 'SLA 预警',
+      value: stats.workorderStats.slaWarning || 0,
+      icon: Clock,
+      color: 'bg-yellow-500',
+      bgColor: 'bg-yellow-50',
+    },
+    {
+      label: 'SLA 超时',
+      value: stats.workorderStats.slaOverdue || 0,
       icon: XCircle,
       color: 'bg-red-600',
       bgColor: 'bg-red-50',
@@ -222,6 +252,7 @@ function Dashboard() {
             {stats?.recentExceptions && stats.recentExceptions.length > 0 ? (
               stats.recentExceptions.slice(0, 5).map((node) => {
                 const isClosed = node.isClosed || false
+                const slaStatus = calculateSlaStatus(node.slaDeadline, isClosed)
                 return (
                   <div
                     key={node.id}
@@ -229,16 +260,24 @@ function Dashboard() {
                       'p-4 border rounded-lg transition-colors',
                       isClosed
                         ? 'bg-green-50 border-green-200'
-                        : node.handled
-                          ? 'bg-yellow-50 border-yellow-200'
-                          : 'bg-red-50 border-red-200'
+                        : slaStatus === 'overdue'
+                          ? 'bg-red-50 border-red-300'
+                          : slaStatus === 'warning'
+                            ? 'bg-yellow-50 border-yellow-300'
+                            : node.handled
+                              ? 'bg-blue-50 border-blue-200'
+                              : 'bg-red-50 border-red-200'
                     )}
                   >
                     <div className="flex items-start gap-3">
                       {isClosed ? (
                         <CheckCircle size={20} className="text-green-600 flex-shrink-0 mt-0.5" />
+                      ) : slaStatus === 'overdue' ? (
+                        <XCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+                      ) : slaStatus === 'warning' ? (
+                        <Clock size={20} className="text-yellow-600 flex-shrink-0 mt-0.5" />
                       ) : node.handled ? (
-                        <AlertCircle size={20} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+                        <AlertCircle size={20} className="text-blue-600 flex-shrink-0 mt-0.5" />
                       ) : (
                         <AlertTriangle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
                       )}
@@ -248,9 +287,13 @@ function Dashboard() {
                             'font-medium',
                             isClosed
                               ? 'text-green-800'
-                              : node.handled
-                                ? 'text-yellow-800'
-                                : 'text-red-800'
+                              : slaStatus === 'overdue'
+                                ? 'text-red-800'
+                                : slaStatus === 'warning'
+                                  ? 'text-yellow-800'
+                                  : node.handled
+                                    ? 'text-blue-800'
+                                    : 'text-red-800'
                           )}>
                             {node.nodeName}
                           </p>
@@ -270,6 +313,14 @@ function Dashboard() {
                               {formatHandlingStatus(node.handlingStatus).label}
                             </span>
                           )}
+                          {!isClosed && (
+                            <span className={clsx(
+                              'text-xs px-2 py-0.5 rounded-full',
+                              formatSlaStatus(slaStatus).color
+                            )}>
+                              {formatSlaStatus(slaStatus).label}
+                            </span>
+                          )}
                           {isClosed && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-green-200 text-green-800">
                               已闭环
@@ -280,22 +331,42 @@ function Dashboard() {
                           'text-sm mt-1',
                           isClosed
                             ? 'text-green-600'
-                            : node.handled
-                              ? 'text-yellow-600'
-                              : 'text-red-600'
+                            : slaStatus === 'overdue'
+                              ? 'text-red-600'
+                              : slaStatus === 'warning'
+                                ? 'text-yellow-600'
+                                : node.handled
+                                  ? 'text-blue-600'
+                                  : 'text-red-600'
                         )}>
                           {node.exceptionDescription}
                         </p>
-                        <p className={clsx(
-                          'text-xs mt-2',
-                          isClosed
-                            ? 'text-green-500'
-                            : node.handled
-                              ? 'text-yellow-500'
-                              : 'text-red-500'
-                        )}>
-                          {formatDateTime(node.recordedAt || node.createdAt)} · {node.operatorName}
-                        </p>
+                        <div className="flex items-center gap-4 mt-2">
+                          <p className={clsx(
+                            'text-xs',
+                            isClosed
+                              ? 'text-green-500'
+                              : slaStatus === 'overdue'
+                                ? 'text-red-500'
+                                : slaStatus === 'warning'
+                                  ? 'text-yellow-500'
+                                  : node.handled
+                                    ? 'text-blue-500'
+                                    : 'text-red-500'
+                          )}>
+                            {formatDateTime(node.recordedAt || node.createdAt)} · {node.operatorName}
+                          </p>
+                          {!isClosed && node.slaDeadline && (
+                            <p className={clsx(
+                              'text-xs font-medium',
+                              slaStatus === 'overdue' ? 'text-red-600' :
+                              slaStatus === 'warning' ? 'text-yellow-600' :
+                              'text-green-600'
+                            )}>
+                              {formatRemainingTime(node.slaDeadline, isClosed)}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>

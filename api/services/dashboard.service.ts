@@ -37,6 +37,7 @@ export const dashboardService = {
       .filter((t): t is DeliveryTask => t !== undefined);
 
     exceptionHandlingRepository.syncExceptionNodes();
+    exceptionHandlingRepository.autoEscalateOverdue();
 
     const recentExceptionsRaw = nodeRepository.findRecentExceptions(10);
     const recentExceptions = recentExceptionsRaw.map(node => {
@@ -47,6 +48,7 @@ export const dashboardService = {
         handlingStatus: handling?.handlingStatus,
         isClosed: handling?.isClosed || false,
         escalationLevel: handling?.escalationLevel,
+        slaDeadline: handling?.slaDeadline,
       };
     });
 
