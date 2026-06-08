@@ -1,5 +1,6 @@
+import { v4 as uuidv4 } from 'uuid';
 import { BaseRepository } from './base';
-import type { Order, OrderStatus, TemperatureZone, OrderTimeline, OrderTimelineEvent, NodeType } from '../../shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline, OrderTimelineEvent, NodeType, BatchOrderCreateItem, BatchOrderCreateResult } from '../../shared/types';
 
 class OrderRepository extends BaseRepository<Order> {
   protected tableName = 'orders';
@@ -276,6 +277,63 @@ class OrderRepository extends BaseRepository<Order> {
       }
       return order;
     });
+  }
+
+  createOrdersBatch(ordersData: BatchOrderCreateItem[]): BatchOrderCreateResult {
+    const orderIds: string[] = [];
+    const orderNos: string[] = [];
+    const now = new Date().toISOString();
+
+    const insertTransaction = this.db.transaction((orders: BatchOrderCreateItem[]) => {
+      const insertStmt = this.db.prepare(`
+        INSERT INTO orders (
+          id, order_no, customer_id, temperature_zone, min_temp, max_temp,
+          goods_name, quantity, weight, delivery_address, scheduled_delivery_time,
+          status, remarks, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const item of orders) {
+        const id = uuidv4();
+        insertStmt.run(
+          id,
+          item.orderNo,
+          item.customerId,
+          item.temperatureZone,
+          item.minTemp,
+          item.maxTemp,
+          item.goodsName,
+          item.quantity,
+          item.weight,
+          item.deliveryAddress,
+          item.scheduledDeliveryTime,
+          'created',
+          item.remarks || '',
+          now,
+          now
+        );
+        orderIds.push(id);
+        orderNos.push(item.orderNo);
+      }
+    });
+
+    try {
+      insertTransaction(ordersData);
+      return {
+        success: true,
+        orderIds,
+        orderNos,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        errors: [{
+          rowIndex: 0,
+          field: 'system',
+          message: '数据库操作失败：' + (error as Error).message,
+        }],
+      };
+    }
   }
 }
 

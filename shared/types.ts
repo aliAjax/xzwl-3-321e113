@@ -1,5 +1,38 @@
 export type TemperatureZone = 'frozen' | 'chilled' | 'ambient';
 export type OrderStatus = 'created' | 'warehoused' | 'loading' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
+
+export const TEMPERATURE_ZONE_RANGES: Record<TemperatureZone, { min: number; max: number; label: string }> = {
+  frozen: { min: -30, max: -10, label: '冷冻' },
+  chilled: { min: 0, max: 8, label: '冷藏' },
+  ambient: { min: 15, max: 30, label: '常温' },
+};
+
+export interface BatchOrderCreateItem {
+  orderNo: string;
+  customerId: string;
+  temperatureZone: TemperatureZone;
+  minTemp: number;
+  maxTemp: number;
+  goodsName: string;
+  quantity: number;
+  weight: number;
+  deliveryAddress: string;
+  scheduledDeliveryTime: string;
+  remarks?: string;
+}
+
+export interface BatchOrderValidationError {
+  rowIndex: number;
+  field: string;
+  message: string;
+}
+
+export interface BatchOrderCreateResult {
+  success: boolean;
+  orderIds?: string[];
+  orderNos?: string[];
+  errors?: BatchOrderValidationError[];
+}
 export type NodeType = 'warehouse_in' | 'loading' | 'departure' | 'arrival' | 'delivery' | 'signature';
 export type NodeStatus = 'pending' | 'in_progress' | 'completed' | 'exception';
 export type UserRole = 'admin' | 'dispatcher' | 'driver';

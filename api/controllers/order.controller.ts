@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { orderService } from '../services/order.service';
-import type { Order, OrderStatus, TemperatureZone, OrderTimeline } from '@shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline, BatchOrderCreateItem, BatchOrderValidationError } from '@shared/types';
 
 export const orderController = {
   async getAll(req: Request, res: Response): Promise<Response> {
@@ -251,6 +251,50 @@ export const orderController = {
       return res.status(200).json(timeline);
     } catch (error) {
       return res.status(500).json({ message: '获取订单追踪信息失败', error: (error as Error).message });
+    }
+  },
+
+
+  async batchCreate(req: Request, res: Response): Promise<Response> {
+    try {
+      const ordersData = req.body as BatchOrderCreateItem[];
+
+      if (!Array.isArray(ordersData)) {
+        return res.status(400).json({
+          success: false,
+          message: "请求体必须是数组",
+        });
+      }
+
+      if (ordersData.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "订单列表不能为空",
+        });
+      }
+
+      const result = await orderService.createOrdersBatch(ordersData);
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          errors: result.errors,
+          message: "数据校验失败",
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        orderIds: result.orderIds,
+        orderNos: result.orderNos,
+        count: result.orderIds.length,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "批量创建订单失败",
+        error: (error as Error).message,
+      });
     }
   },
 };

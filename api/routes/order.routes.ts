@@ -16,6 +16,7 @@ router.get('/order-no/:orderNo', authMiddleware, requireRoles('admin', 'dispatch
 router.get('/:id/timeline', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), orderController.getTimeline);
 router.get('/:id', authMiddleware, requireRoles('admin', 'dispatcher', 'driver'), orderController.getById);
 router.post('/', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.create);
+router.post('/batch', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.batchCreate);
 router.put('/:id', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.update);
 router.patch('/:id/status', authMiddleware, requireRoles('admin', 'dispatcher'), orderController.updateStatus);
 router.delete('/:id', authMiddleware, requireRoles('admin'), orderController.delete);

@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   FileSpreadsheet,
   Smartphone,
+  Layers,
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { formatUserRole } from '@/utils/format'
@@ -40,6 +41,7 @@ const menuItems: MenuItem[] = [
   { path: '/temperature-import', label: '温控记录导入', icon: FileSpreadsheet, roles: ['admin', 'dispatcher'] },
   { path: '/exceptions', label: '异常处理', icon: AlertTriangle, roles: ['admin', 'dispatcher'] },
   { path: '/orders', label: '订单管理', icon: Package, roles: ['admin', 'dispatcher'] },
+  { path: '/orders/batch', label: '批量订单创建', icon: Layers, roles: ['admin', 'dispatcher'] },
   { path: '/warehouse', label: '入仓登记', icon: Archive, roles: ['admin', 'dispatcher'] },
   { path: '/dispatch', label: '调度中心', icon: ClipboardList, roles: ['admin', 'dispatcher'] },
   { path: '/loading', label: '装车管理', icon: Warehouse, roles: ['admin', 'dispatcher'] },

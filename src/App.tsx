@@ -16,6 +16,7 @@ import CustomerManagement from '@/pages/CustomerManagement'
 import RouteManagement from '@/pages/RouteManagement'
 import ExceptionHandling from '@/pages/ExceptionHandling'
 import TemperatureRecordImport from '@/pages/TemperatureRecordImport'
+import BatchOrderCreate from '@/pages/BatchOrderCreate'
 import DriverMobile from '@/pages/DriverMobile'
 import type { UserRole } from '@shared/types'
 
@@ -113,6 +114,14 @@ function App() {
           element={
             <RoleRoute allowedRoles={['admin', 'dispatcher']}>
               <OrderList />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="orders/batch"
+          element={
+            <RoleRoute allowedRoles={['admin', 'dispatcher']}>
+              <BatchOrderCreate />
             </RoleRoute>
           }
         />
