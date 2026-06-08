@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Package, Thermometer, MapPin, Calendar, User, Phone, Clock } from 'lucide-react'
+import { useParams, Link } from 'react-router-dom'
+import { ArrowLeft, Package, Thermometer, MapPin, Calendar, User, Phone, Clock, CheckCircle, AlertCircle, AlertTriangle } from 'lucide-react'
 import { api } from '@/utils/api'
 import {
   formatDateTime,
@@ -9,16 +9,18 @@ import {
   formatTemperatureRange,
   formatWeight,
   formatPhone,
+  formatEscalationLevel,
+  formatHandlingStatus,
 } from '@/utils/format'
 import Timeline from '@/components/Timeline'
-import type { Order, DeliveryNode, OrderTimeline } from '@shared/types'
+import type { Order, DeliveryNode, OrderTimeline, ExceptionHandlingNodeStatusResponse } from '@shared/types'
 import clsx from 'clsx'
 
 function OrderDetail() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
   const [order, setOrder] = useState<Order | null>(null)
   const [timelineNodes, setTimelineNodes] = useState<DeliveryNode[]>([])
+  const [nodeStatusMap, setNodeStatusMap] = useState<Record<string, ExceptionHandlingNodeStatusResponse>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -33,13 +35,27 @@ function OrderDetail() {
         api.get<Order>(`/orders/${id}`),
         api.get<OrderTimeline>(`/orders/${id}/timeline`),
       ])
-      setOrder(orderData)
-      setTimelineNodes(timelineData.events.map((event) => ({
+      const nodes = timelineData.events.map((event) => ({
         ...event,
         taskId: '',
         operatorId: event.operatorId || '',
         operatorName: event.operatorName || '',
-      })))
+      }))
+      setOrder(orderData)
+      setTimelineNodes(nodes)
+
+      const exceptionNodes = nodes.filter((node) => node.status === 'exception')
+      if (exceptionNodes.length > 0) {
+        const statusPromises = exceptionNodes.map((node) =>
+          api.get<ExceptionHandlingNodeStatusResponse>(`/exceptions/node/${node.id}`)
+        )
+        const statuses = await Promise.all(statusPromises)
+        const statusMap: Record<string, ExceptionHandlingNodeStatusResponse> = {}
+        exceptionNodes.forEach((node, index) => {
+          statusMap[node.id] = statuses[index]
+        })
+        setNodeStatusMap(statusMap)
+      }
     } catch (error) {
       console.error('Failed to load order detail:', error)
     } finally {
@@ -187,24 +203,98 @@ function OrderDetail() {
             <h2 className="text-lg font-semibold text-gray-800 mb-4">追踪节点</h2>
             <div className="space-y-3">
               {timelineNodes.length > 0 ? (
-                timelineNodes.map((node) => (
-                  <div
-                    key={node.id}
-                    className="p-3 bg-gray-50 rounded-lg border border-gray-100"
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-800">
-                        {node.nodeName}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {node.status}
-                      </span>
+                timelineNodes.map((node) => {
+                  const isException = node.status === 'exception'
+                  const nodeStatus = nodeStatusMap[node.id]
+                  
+                  return (
+                    <div
+                      key={node.id}
+                      className={clsx(
+                        'p-3 rounded-lg border',
+                        isException
+                          ? nodeStatus?.isClosed
+                            ? 'bg-green-50 border-green-200'
+                            : 'bg-red-50 border-red-200'
+                          : 'bg-gray-50 border-gray-100'
+                      )}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          {isException && (
+                            nodeStatus?.isClosed ? (
+                              <CheckCircle size={16} className="text-green-600" />
+                            ) : (
+                              <AlertTriangle size={16} className="text-red-600" />
+                            )
+                          )}
+                          <span className={clsx(
+                            'text-sm font-medium',
+                            isException
+                              ? nodeStatus?.isClosed
+                                ? 'text-green-800'
+                                : 'text-red-800'
+                              : 'text-gray-800'
+                          )}>
+                            {node.nodeName}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isException && nodeStatus?.data?.escalationLevel && (
+                            <span className={clsx(
+                              'text-xs px-2 py-0.5 rounded-full',
+                              formatEscalationLevel(nodeStatus.data.escalationLevel).color
+                            )}>
+                              {formatEscalationLevel(nodeStatus.data.escalationLevel).label}
+                            </span>
+                          )}
+                          {isException && nodeStatus?.data?.handlingStatus && (
+                            <span className={clsx(
+                              'text-xs px-2 py-0.5 rounded-full',
+                              formatHandlingStatus(nodeStatus.data.handlingStatus).color
+                            )}>
+                              {formatHandlingStatus(nodeStatus.data.handlingStatus).label}
+                            </span>
+                          )}
+                          <span className={clsx(
+                            'text-xs',
+                            isException
+                              ? nodeStatus?.isClosed
+                                ? 'text-green-600'
+                                : 'text-red-600'
+                              : 'text-gray-500'
+                          )}>
+                            {isException && nodeStatus?.isClosed ? '已闭环' : node.status}
+                          </span>
+                        </div>
+                      </div>
+                      {isException && node.exceptionDescription && (
+                        <p className={clsx(
+                          'text-xs mb-2',
+                          nodeStatus?.isClosed ? 'text-green-600' : 'text-red-600'
+                        )}>
+                          {node.exceptionDescription}
+                        </p>
+                      )}
+                      {isException && nodeStatus?.data?.assignee && (
+                        <p className="text-xs text-gray-500 mb-1">
+                          处理人：{nodeStatus.data.assignee.name}
+                        </p>
+                      )}
+                      {isException && nodeStatus?.data?.handlingResult && (
+                        <p className="text-xs text-gray-500 mb-1">
+                          处理结果：{nodeStatus.data.handlingResult}
+                        </p>
+                      )}
+                      <p className="text-xs text-gray-500">
+                        {node.recordedAt ? formatDateTime(node.recordedAt) : '待记录'}
+                        {isException && nodeStatus?.data?.closedAt && (
+                          <span className="ml-2">· 闭环时间：{formatDateTime(nodeStatus.data.closedAt)}</span>
+                        )}
+                      </p>
                     </div>
-                    <p className="text-xs text-gray-500">
-                      {node.recordedAt ? formatDateTime(node.recordedAt) : '待记录'}
-                    </p>
-                  </div>
-                ))
+                  )
+                })
               ) : (
                 <p className="text-sm text-gray-500 text-center py-4">暂无追踪节点</p>
               )}

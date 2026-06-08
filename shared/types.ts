@@ -340,6 +340,20 @@ export interface TemperatureZoneSummary {
 
 export type ExceptionHandlingStatus = 'pending' | 'resolved' | 'escalated';
 export type ExceptionHandlingResult = 'recovered' | 'compensated' | 're_routed' | 'cancelled' | 'other';
+export type EscalationLevel = 'level_1' | 'level_2' | 'level_3';
+export type ProcessingNoteActionType = 'create' | 'assign' | 'escalate' | 'add_note' | 'update_status' | 'close' | 'reopen';
+
+export interface ExceptionProcessingNote {
+  id: string;
+  exceptionHandlingId: string;
+  note: string;
+  createdBy?: string;
+  createdByName?: string;
+  actionType: ProcessingNoteActionType;
+  oldValue?: string;
+  newValue?: string;
+  createdAt: string;
+}
 
 export interface ExceptionHandling {
   id: string;
@@ -359,6 +373,13 @@ export interface ExceptionHandling {
   handlingNotes?: string;
   handledBy?: string;
   handledAt?: string;
+  escalationLevel: EscalationLevel;
+  assigneeId?: string;
+  assignee?: User;
+  isClosed: boolean;
+  closedAt?: string;
+  closedBy?: string;
+  processingNotes?: ExceptionProcessingNote[];
   createdAt: string;
   updatedAt: string;
 }
@@ -377,6 +398,9 @@ export interface ExceptionHandlingQueryParams {
   driverId?: string;
   orderStatus?: OrderStatus;
   handlingStatus?: ExceptionHandlingStatus;
+  escalationLevel?: EscalationLevel;
+  assigneeId?: string;
+  isClosed?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -391,11 +415,54 @@ export interface ExceptionHandlingUpdateRequest {
   handlingNotes: string;
 }
 
+export interface ExceptionHandlingAssignRequest {
+  assigneeId: string;
+  note?: string;
+}
+
+export interface ExceptionHandlingEscalateRequest {
+  escalationLevel: EscalationLevel;
+  note?: string;
+}
+
+export interface ExceptionHandlingAddNoteRequest {
+  note: string;
+}
+
+export interface ExceptionHandlingCloseRequest {
+  handlingResult: ExceptionHandlingResult;
+  note: string;
+}
+
+export interface ExceptionHandlingReopenRequest {
+  note: string;
+}
+
+export interface ExceptionHandlingWorkorderStats {
+  total: number;
+  pending: number;
+  resolved: number;
+  escalated: number;
+  closed: number;
+  open: number;
+  level1: number;
+  level2: number;
+  level3: number;
+  unassigned: number;
+}
+
 export interface ExceptionHandlingListResponse {
   items: ExceptionHandlingWithDetails[];
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface ExceptionHandlingNodeStatusResponse {
+  exists: boolean;
+  data: ExceptionHandlingWithDetails | null;
+  isHandled: boolean;
+  isClosed: boolean;
 }
 
 export interface DashboardStats {
@@ -404,9 +471,15 @@ export interface DashboardStats {
   inTransitVehicles: number;
   pendingOrders: number;
   todayTasks: DeliveryTask[];
-  recentExceptions: Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus }>;
+  recentExceptions: Array<DeliveryNode & { 
+    handled: boolean; 
+    handlingStatus?: ExceptionHandlingStatus;
+    isClosed?: boolean;
+    escalationLevel?: EscalationLevel;
+  }>;
   pendingExceptionCount: number;
   handledExceptionCount: number;
+  workorderStats?: ExceptionHandlingWorkorderStats;
 }
 
 export type TemperatureRecordStatus = 'importable' | 'abnormal' | 'unmatched';

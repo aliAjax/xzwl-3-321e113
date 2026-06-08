@@ -8,6 +8,8 @@ import {
   BatchStatus,
   ExceptionHandlingStatus,
   ExceptionHandlingResult,
+  EscalationLevel,
+  ProcessingNoteActionType,
 } from '@shared/types'
 
 export function formatDate(date: string | Date, pattern: string = 'yyyy-MM-dd HH:mm:ss'): string {
@@ -159,4 +161,28 @@ const handlingResultMap: Record<ExceptionHandlingResult, { label: string }> = {
 
 export function formatHandlingResult(result: ExceptionHandlingResult): { label: string } {
   return handlingResultMap[result] || { label: result }
+}
+
+const escalationLevelMap: Record<EscalationLevel, { label: string; color: string }> = {
+  level_1: { label: '一级（普通）', color: 'bg-blue-100 text-blue-800' },
+  level_2: { label: '二级（紧急）', color: 'bg-orange-100 text-orange-800' },
+  level_3: { label: '三级（严重）', color: 'bg-red-100 text-red-800' },
+}
+
+export function formatEscalationLevel(level: EscalationLevel): { label: string; color: string } {
+  return escalationLevelMap[level] || { label: level, color: 'bg-gray-100 text-gray-800' }
+}
+
+const actionTypeMap: Record<ProcessingNoteActionType, { label: string; color: string }> = {
+  create: { label: '创建工单', color: 'bg-gray-100 text-gray-800' },
+  assign: { label: '分配处理人', color: 'bg-blue-100 text-blue-800' },
+  escalate: { label: '升级级别', color: 'bg-orange-100 text-orange-800' },
+  add_note: { label: '添加备注', color: 'bg-purple-100 text-purple-800' },
+  update_status: { label: '更新状态', color: 'bg-indigo-100 text-indigo-800' },
+  close: { label: '关闭工单', color: 'bg-green-100 text-green-800' },
+  reopen: { label: '重新开启', color: 'bg-yellow-100 text-yellow-800' },
+}
+
+export function formatActionType(action: ProcessingNoteActionType): { label: string; color: string } {
+  return actionTypeMap[action] || { label: action, color: 'bg-gray-100 text-gray-800' }
 }

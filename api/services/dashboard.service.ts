@@ -5,7 +5,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { batchRepository } from '../repositories/batch.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
-import type { DashboardStats, DeliveryTask, DeliveryNode, OrderStatus, ExceptionHandlingStatus } from '../../shared/types';
+import type { DashboardStats, DeliveryTask, DeliveryNode, OrderStatus, ExceptionHandlingStatus, EscalationLevel } from '../../shared/types';
 
 export const dashboardService = {
   getStats(): DashboardStats {
@@ -45,12 +45,16 @@ export const dashboardService = {
         ...node,
         handled: !!handling && handling.handlingStatus !== 'pending',
         handlingStatus: handling?.handlingStatus,
+        isClosed: handling?.isClosed || false,
+        escalationLevel: handling?.escalationLevel,
       };
     });
 
     const pendingExceptionCount = exceptionHandlingRepository.countByHandlingStatus('pending');
     const handledExceptionCount = exceptionHandlingRepository.countByHandlingStatus('resolved') +
       exceptionHandlingRepository.countByHandlingStatus('escalated');
+
+    const workorderStats = exceptionHandlingRepository.getWorkorderStats();
 
     return {
       todayDeliveries,
@@ -61,6 +65,7 @@ export const dashboardService = {
       recentExceptions,
       pendingExceptionCount,
       handledExceptionCount,
+      workorderStats,
     };
   },
 
@@ -362,7 +367,7 @@ export const dashboardService = {
     return this.getStats().todayTasks;
   },
 
-  getRecentExceptions(limit: number = 10): Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus }> {
+  getRecentExceptions(limit: number = 10): Array<DeliveryNode & { handled: boolean; handlingStatus?: ExceptionHandlingStatus; isClosed?: boolean; escalationLevel?: EscalationLevel }> {
     exceptionHandlingRepository.syncExceptionNodes();
 
     const recentExceptionsRaw = nodeRepository.findRecentExceptions(limit);
@@ -372,6 +377,8 @@ export const dashboardService = {
         ...node,
         handled: !!handling && handling.handlingStatus !== 'pending',
         handlingStatus: handling?.handlingStatus,
+        isClosed: handling?.isClosed || false,
+        escalationLevel: handling?.escalationLevel,
       };
     });
   },
