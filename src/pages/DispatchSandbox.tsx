@@ -70,11 +70,9 @@ function DispatchSandbox() {
   }, [])
 
   useEffect(() => {
-    if (hasActiveFilters) {
-      setSandboxResult(null)
-      setPlanDetail(null)
-      setShowDetail(false)
-    }
+    setSandboxResult(null)
+    setPlanDetail(null)
+    setShowDetail(false)
   }, [filterCustomerId, filterTemperatureZone, filterStatus, filterDeliveryDate])
 
   async function loadData() {
