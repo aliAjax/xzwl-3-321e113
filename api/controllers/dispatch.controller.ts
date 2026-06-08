@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { dispatchService } from '../services/dispatch.service';
-import type { DispatchRequest, DispatchPreviewRequest } from '@shared/types';
+import type { DispatchRequest, DispatchPreviewRequest } from '../../shared/types';
 
 export const dispatchController = {
   async findMatches(req: Request, res: Response): Promise<Response> {

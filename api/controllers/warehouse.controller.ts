@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { warehouseService } from '../services/warehouse.service';
-import type { WarehouseInRegisterRequest, WarehouseInQueryParams } from '@shared/types';
+import type { WarehouseInRegisterRequest, WarehouseInQueryParams } from '../../shared/types';
 
 export const warehouseController = {
   async getPendingOrders(req: Request, res: Response): Promise<Response> {

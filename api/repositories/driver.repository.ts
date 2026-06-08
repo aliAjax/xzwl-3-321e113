@@ -7,6 +7,7 @@ class DriverRepository extends BaseRepository<Driver> {
     id: 'id',
     name: 'name',
     phone: 'phone',
+    driverId: 'driver_id',
     licenseNo: 'license_no',
     licenseType: 'license_type',
     status: 'status',

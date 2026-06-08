@@ -8,6 +8,7 @@ class CustomerRepository extends BaseRepository<Customer> {
     name: 'name',
     contactName: 'contact_name',
     phone: 'phone',
+    driverId: 'driver_id',
     address: 'address',
     priority: 'priority',
     createdAt: 'created_at',

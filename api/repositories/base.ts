@@ -159,8 +159,8 @@ export abstract class BaseRepository<T extends { id: string }> {
 
   exists(id: string): boolean {
     const row = this.db
-      .prepare(`SELECT 1 as exists FROM ${this.tableName} WHERE id = ?`)
-      .get(id) as { exists: number } | undefined;
-    return row?.exists === 1;
+      .prepare(`SELECT 1 as record_exists FROM ${this.tableName} WHERE id = ?`)
+      .get(id) as { record_exists: number } | undefined;
+    return row?.record_exists === 1;
   }
 }

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { orderService } from '../services/order.service';
-import type { Order, OrderStatus, TemperatureZone, OrderTimeline, BatchOrderCreateItem, BatchOrderValidationError } from '@shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline, BatchOrderCreateItem, BatchOrderValidationError } from '../../shared/types';
 
 export const orderController = {
   async getAll(req: Request, res: Response): Promise<Response> {
@@ -287,7 +287,7 @@ export const orderController = {
         success: true,
         orderIds: result.orderIds,
         orderNos: result.orderNos,
-        count: result.orderIds.length,
+        count: result.orderIds?.length || 0,
       });
     } catch (error) {
       return res.status(500).json({

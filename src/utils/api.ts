@@ -22,6 +22,18 @@ function clearAuth() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+export class ApiError extends Error {
+  public status: number
+  public data?: unknown
+
+  constructor(message: string, status: number, data?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.data = data
+  }
+}
+
 class ApiClient {
   private baseUrl = '/api'
   private timeout = 30000
@@ -59,21 +71,31 @@ class ApiClient {
       if (response.status === 401) {
         clearAuth()
         window.location.href = '/login'
-        throw new Error('未授权，请重新登录')
+        throw new ApiError('未授权，请重新登录', 401)
       }
 
       const result = await response.json()
 
       if (!response.ok) {
-        throw new Error(result.message || result.error || `请求失败: ${response.status}`)
+        throw new ApiError(
+          result.message || result.error || `请求失败: ${response.status}`,
+          response.status,
+          result
+        )
       }
 
       return result as T
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('请求超时')
+      if (error instanceof ApiError) {
+        throw error
       }
-      throw error
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ApiError('请求超时', 0)
+      }
+      if (error instanceof Error) {
+        throw new ApiError(error.message, 0)
+      }
+      throw new ApiError('未知错误', 0)
     }
   }
 

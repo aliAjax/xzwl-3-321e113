@@ -164,6 +164,10 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
   updateNode(id: string, data: Partial<Omit<DeliveryNode, 'id' | 'createdAt'>>): DeliveryNode | undefined {
     return this.update(id, data);
   }
+
+  mapFromDatabase(row: Record<string, unknown>): DeliveryNode {
+    return this.fromDatabase(row);
+  }
 }
 
 export const nodeRepository = new NodeRepository();

@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { deliveryService } from '../services/delivery.service';
 import { nodeRepository } from '../repositories/node.repository';
 import db from '../db';
-import type { NodeUpdateRequest, NodeType, User } from '@shared/types';
+import type { NodeUpdateRequest, NodeType, User } from '../../shared/types';
 
 function getNodeWithDetails(nodeId: string): any {
   const row = db
@@ -36,7 +36,7 @@ function getNodeWithDetails(nodeId: string): any {
 
   if (!row) return undefined;
 
-  const node = nodeRepository.fromDatabase(row);
+  const node = nodeRepository.mapFromDatabase(row);
 
   return {
     ...node,

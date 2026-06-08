@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { orderRepository } from '../repositories/order.repository';
 import { customerService } from './customer.service';
-import type { Order, OrderStatus, TemperatureZone, OrderTimeline, BatchOrderValidationError, BatchOrderCreateItem } from '@shared/types';
-import { TEMPERATURE_ZONE_RANGES } from '@shared/types';
+import type { Order, OrderStatus, TemperatureZone, OrderTimeline, BatchOrderValidationError, BatchOrderCreateItem, BatchOrderCreateResult } from '../../shared/types';
+import { TEMPERATURE_ZONE_RANGES } from '../../shared/types';
 export const orderService = {
   async getAllOrders(options?: { limit?: number; offset?: number }): Promise<Order[]> {
     return orderRepository.findAllWithCustomer(options);

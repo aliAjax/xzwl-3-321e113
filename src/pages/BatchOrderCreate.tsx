@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2, Upload, CheckCircle, AlertCircle, ArrowLeft, FileText } from 'lucide-react'
-import { api } from '@/utils/api'
+import { api, ApiError } from '@/utils/api'
 import { formatTemperatureZone } from '@/utils/format'
-import type { Customer, TemperatureZone, BatchOrderCreateItem, BatchOrderValidationError, TEMPERATURE_ZONE_RANGES } from '@shared/types'
+import type { Customer, TemperatureZone, BatchOrderCreateItem, BatchOrderValidationError } from '@shared/types'
+import { TEMPERATURE_ZONE_RANGES } from '@shared/types'
 import { clsx } from 'clsx'
 
 interface OrderRow extends BatchOrderCreateItem {
@@ -16,9 +17,9 @@ interface FieldError {
 }
 
 const temperatureZoneOptions: { value: TemperatureZone; label: string }[] = [
-  { value: 'frozen', label: '冷冻 (-30°C ~ -10°C)' },
-  { value: 'chilled', label: '冷藏 (0°C ~ 8°C)' },
-  { value: 'ambient', label: '常温 (15°C ~ 30°C)' },
+  { value: 'frozen', label: `冷冻 (${TEMPERATURE_ZONE_RANGES.frozen.min}°C ~ ${TEMPERATURE_ZONE_RANGES.frozen.max}°C)` },
+  { value: 'chilled', label: `冷藏 (${TEMPERATURE_ZONE_RANGES.chilled.min}°C ~ ${TEMPERATURE_ZONE_RANGES.chilled.max}°C)` },
+  { value: 'ambient', label: `常温 (${TEMPERATURE_ZONE_RANGES.ambient.min}°C ~ ${TEMPERATURE_ZONE_RANGES.ambient.max}°C)` },
 ]
 
 function generateOrderNo(): string {
@@ -74,12 +75,7 @@ function BatchOrderCreate() {
 
       if (field === 'temperatureZone') {
         const zone = value as TemperatureZone
-        const ranges: typeof TEMPERATURE_ZONE_RANGES = {
-          frozen: { min: -30, max: -10, label: '冷冻' },
-          chilled: { min: 0, max: 8, label: '冷藏' },
-          ambient: { min: 15, max: 30, label: '常温' },
-        }
-        const range = ranges[zone]
+        const range = TEMPERATURE_ZONE_RANGES[zone]
         newRows[rowIndex].minTemp = range.min
         newRows[rowIndex].maxTemp = range.max
       }
@@ -148,12 +144,7 @@ function BatchOrderCreate() {
       errors.push({ field: 'scheduledDeliveryTime', message: '请选择送达时间' })
     }
 
-    const ranges: typeof TEMPERATURE_ZONE_RANGES = {
-      frozen: { min: -30, max: -10, label: '冷冻' },
-      chilled: { min: 0, max: 8, label: '冷藏' },
-      ambient: { min: 15, max: 30, label: '常温' },
-    }
-    const range = ranges[row.temperatureZone]
+    const range = TEMPERATURE_ZONE_RANGES[row.temperatureZone]
     if (row.minTemp < range.min || row.minTemp > range.max) {
       errors.push({ field: 'minTemp', message: `最低温度需在 ${range.min}°C ~ ${range.max}°C 之间` })
     }
@@ -227,13 +218,11 @@ function BatchOrderCreate() {
       }
     } catch (error) {
       console.error('Batch create failed:', error)
-      try {
-        const err = error as { message?: string; errors?: BatchOrderValidationError[] }
-        if (err.errors) {
-          setApiErrors(err.errors)
+      if (error instanceof ApiError && error.data) {
+        const errData = error.data as { errors?: BatchOrderValidationError[] }
+        if (errData.errors) {
+          setApiErrors(errData.errors)
         }
-      } catch {
-        // ignore
       }
     } finally {
       setSubmitting(false)

@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import db from '../db';
 import { jwtConfig } from '../config/jwt';
-import { User, AuthResponse, LoginRequest } from '@shared/types';
+import type { User, AuthResponse, LoginRequest } from '../../shared/types';
 
 interface UserRow {
   id: string;
