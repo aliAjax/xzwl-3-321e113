@@ -313,6 +313,118 @@ function TemperatureRecordImport() {
     })
   }
 
+  function escapeCsvValue(value: string | number | null | undefined): string {
+    if (value === null || value === undefined) return ''
+    const str = String(value)
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`
+    }
+    return str
+  }
+
+  function downloadCsv(content: string, filename: string) {
+    const BOM = '\uFEFF'
+    const blob = new Blob([BOM + content], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportAbnormalRecords = () => {
+    if (!previewData || previewData.abnormalRecords.length === 0) {
+      alert('没有异常记录可导出')
+      return
+    }
+
+    const headers = ['原始行号', '订单号', '节点类型', '温度', '失败原因', '建议修正字段']
+    const rows = previewData.abnormalRecords.map(record => [
+      record.lineNumber,
+      record.parsed.orderNo,
+      formatNodeType(record.parsed.nodeType),
+      record.parsed.temperature !== null ? formatTemperature(record.parsed.temperature) : '',
+      record.failureReasons.join('; '),
+      record.suggestedCorrectionFields.join('; '),
+    ])
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(escapeCsvValue).join(',')),
+    ].join('\n')
+
+    downloadCsv(csvContent, `温度异常记录_${new Date().toISOString().slice(0, 10)}.csv`)
+  }
+
+  const exportUnmatchedRecords = () => {
+    if (!previewData || previewData.unmatchedRecords.length === 0) {
+      alert('没有未匹配记录可导出')
+      return
+    }
+
+    const headers = ['原始行号', '订单号', '节点类型', '温度', '失败原因', '建议修正字段']
+    const rows = previewData.unmatchedRecords.map(record => [
+      record.lineNumber,
+      record.parsed.orderNo,
+      formatNodeType(record.parsed.nodeType),
+      record.parsed.temperature !== null ? formatTemperature(record.parsed.temperature) : '',
+      record.failureReasons.join('; '),
+      record.suggestedCorrectionFields.join('; '),
+    ])
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(escapeCsvValue).join(',')),
+    ].join('\n')
+
+    downloadCsv(csvContent, `未匹配记录_${new Date().toISOString().slice(0, 10)}.csv`)
+  }
+
+  const exportImportResultByType = (type: 'success' | 'skipped' | 'failed') => {
+    if (!importResult) return
+
+    let records = importResult.results
+    let filename = ''
+    let label = ''
+
+    if (type === 'success') {
+      records = importResult.results.filter(r => r.success && !r.isSkipped)
+      filename = `导入成功记录_${new Date().toISOString().slice(0, 10)}.csv`
+      label = '成功'
+    } else if (type === 'skipped') {
+      records = importResult.results.filter(r => r.isSkipped)
+      filename = `导入跳过记录_${new Date().toISOString().slice(0, 10)}.csv`
+      label = '跳过'
+    } else {
+      records = importResult.results.filter(r => !r.success && !r.isSkipped)
+      filename = `导入失败记录_${new Date().toISOString().slice(0, 10)}.csv`
+      label = '失败'
+    }
+
+    if (records.length === 0) {
+      alert(`没有${label}记录可导出`)
+      return
+    }
+
+    const headers = ['原始行号', '订单号', '状态', '节点ID', '异常ID', '结果说明']
+    const rows = records.map(record => [
+      record.lineNumber,
+      record.orderNo,
+      record.success ? '成功' : record.isSkipped ? '跳过' : '失败',
+      record.nodeId || '',
+      record.exceptionId || '',
+      record.message,
+    ])
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(escapeCsvValue).join(',')),
+    ].join('\n')
+
+    downloadCsv(csvContent, filename)
+  }
+
   const downloadTemplate = () => {
     const template = `订单号,节点类型,记录时间,温度,位置,操作人
 ORD001,warehouse_in,2024-01-01 10:00:00,5.5,一号仓库,张三
@@ -717,43 +829,69 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
           <div className="card">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">导入预览</h3>
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => setActiveTab('importable')}
-                  className={clsx(
-                    'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
-                    activeTab === 'importable'
-                      ? 'bg-white text-green-700 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-800'
-                  )}
-                >
-                  <CheckCircle size={14} />
-                  可导入 ({previewData.importableCount})
-                </button>
-                <button
-                  onClick={() => setActiveTab('abnormal')}
-                  className={clsx(
-                    'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
-                    activeTab === 'abnormal'
-                      ? 'bg-white text-red-700 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-800'
-                  )}
-                >
-                  <AlertTriangle size={14} />
-                  异常 ({previewData.abnormalCount})
-                </button>
-                <button
-                  onClick={() => setActiveTab('unmatched')}
-                  className={clsx(
-                    'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
-                    activeTab === 'unmatched'
-                      ? 'bg-white text-gray-700 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-800'
-                  )}
-                >
-                  <XCircle size={14} />
-                  无法匹配 ({previewData.unmatchedCount})
-                </button>
+              <div className="flex items-center gap-3">
+                <div className="flex bg-gray-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setActiveTab('importable')}
+                    className={clsx(
+                      'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
+                      activeTab === 'importable'
+                        ? 'bg-white text-green-700 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-800'
+                    )}
+                  >
+                    <CheckCircle size={14} />
+                    可导入 ({previewData.importableCount})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('abnormal')}
+                    className={clsx(
+                      'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
+                      activeTab === 'abnormal'
+                        ? 'bg-white text-red-700 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-800'
+                    )}
+                  >
+                    <AlertTriangle size={14} />
+                    异常 ({previewData.abnormalCount})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('unmatched')}
+                    className={clsx(
+                      'px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
+                      activeTab === 'unmatched'
+                        ? 'bg-white text-gray-700 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-800'
+                    )}
+                  >
+                    <XCircle size={14} />
+                    无法匹配 ({previewData.unmatchedCount})
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={exportAbnormalRecords}
+                    disabled={previewData.abnormalCount === 0}
+                    className={clsx(
+                      'btn btn-secondary flex items-center gap-1 text-sm py-1.5 px-3',
+                      previewData.abnormalCount === 0 && 'opacity-50 cursor-not-allowed'
+                    )}
+                  >
+                    <Download size={14} />
+                    导出异常
+                  </button>
+                  <button
+                    onClick={exportUnmatchedRecords}
+                    disabled={previewData.unmatchedCount === 0}
+                    className={clsx(
+                      'btn btn-secondary flex items-center gap-1 text-sm py-1.5 px-3',
+                      previewData.unmatchedCount === 0 && 'opacity-50 cursor-not-allowed'
+                    )}
+                  >
+                    <Download size={14} />
+                    导出未匹配
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -905,10 +1043,50 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
                 失败: {importResult.failedCount}
               </span>
               <span className="flex items-center gap-1 text-sm text-gray-600">
+                <AlertTriangle size={14} className="text-gray-500" />
+                跳过: {importResult.skippedCount}
+              </span>
+              <span className="flex items-center gap-1 text-sm text-gray-600">
                 <AlertTriangle size={14} className="text-orange-500" />
                 异常: {importResult.exceptionCreatedCount}
               </span>
             </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              onClick={() => exportImportResultByType('success')}
+              disabled={importResult.successCount === 0}
+              className={clsx(
+                'btn btn-secondary flex items-center gap-1 text-sm py-1.5 px-3',
+                importResult.successCount === 0 && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              <Download size={14} />
+              导出成功记录
+            </button>
+            <button
+              onClick={() => exportImportResultByType('skipped')}
+              disabled={importResult.skippedCount === 0}
+              className={clsx(
+                'btn btn-secondary flex items-center gap-1 text-sm py-1.5 px-3',
+                importResult.skippedCount === 0 && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              <Download size={14} />
+              导出跳过记录
+            </button>
+            <button
+              onClick={() => exportImportResultByType('failed')}
+              disabled={importResult.failedCount === 0}
+              className={clsx(
+                'btn btn-secondary flex items-center gap-1 text-sm py-1.5 px-3',
+                importResult.failedCount === 0 && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              <Download size={14} />
+              导出失败记录
+            </button>
           </div>
 
           <div className="overflow-x-auto">
@@ -923,19 +1101,27 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
               </thead>
               <tbody>
                 {importResult.results.map((result, index) => (
-                  <tr key={index} className="border-b last:border-b-0 hover:bg-gray-50">
+                  <tr
+                    key={index}
+                    className={clsx(
+                      'border-b last:border-b-0 hover:bg-gray-50',
+                      result.isSkipped && 'bg-gray-50'
+                    )}
+                  >
                     <td className="py-3 px-4 text-sm text-gray-600">{result.lineNumber}</td>
                     <td className="py-3 px-4 text-sm font-medium text-gray-800">{result.orderNo}</td>
                     <td className="py-3 px-4">
                       <span
                         className={clsx(
                           'status-badge',
-                          result.success
+                          result.isSkipped
+                            ? 'bg-gray-100 text-gray-800'
+                            : result.success
                             ? 'bg-green-100 text-green-800'
                             : 'bg-red-100 text-red-800'
                         )}
                       >
-                        {result.success ? '成功' : '失败'}
+                        {result.isSkipped ? '跳过' : result.success ? '成功' : '失败'}
                       </span>
                       {result.isException && (
                         <span className="ml-2 status-badge bg-orange-100 text-orange-800">

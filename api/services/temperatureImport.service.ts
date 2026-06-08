@@ -295,6 +295,35 @@ function validateTemperature(parsed: TemperatureRecordParsed, order: Order): str
   return reasons;
 }
 
+function analyzeSuggestedCorrections(parsed: TemperatureRecordParsed, failureReasons: string[]): string[] {
+  const suggestions: string[] = [];
+  const reasonText = failureReasons.join('; ');
+
+  if (reasonText.includes('订单号')) {
+    suggestions.push('订单号');
+  }
+  if (reasonText.includes('节点类型')) {
+    suggestions.push('节点类型');
+  }
+  if (reasonText.includes('记录时间')) {
+    suggestions.push('记录时间');
+  }
+  if (reasonText.includes('温度') || reasonText.includes('temp')) {
+    suggestions.push('温度');
+  }
+  if (reasonText.includes('未找到订单') || reasonText.includes('未关联任务')) {
+    suggestions.push('订单号');
+  }
+  if (reasonText.includes('未找到节点类型')) {
+    suggestions.push('节点类型');
+  }
+  if (reasonText.includes('已完成') && reasonText.includes('重复导入')) {
+    suggestions.push('节点类型');
+  }
+
+  return [...new Set(suggestions)];
+}
+
 function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValidationResult {
   const failureReasons: string[] = [];
   let status: TemperatureRecordStatus = 'unmatched';
@@ -319,6 +348,7 @@ function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValid
       status: 'unmatched',
       parsed,
       failureReasons,
+      suggestedCorrectionFields: analyzeSuggestedCorrections(parsed, failureReasons),
     };
   }
 
@@ -331,6 +361,7 @@ function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValid
       status: 'unmatched',
       parsed,
       failureReasons,
+      suggestedCorrectionFields: analyzeSuggestedCorrections(parsed, failureReasons),
     };
   }
 
@@ -359,6 +390,7 @@ function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValid
     parsed,
     matched,
     failureReasons,
+    suggestedCorrectionFields: analyzeSuggestedCorrections(parsed, failureReasons),
   };
 }
 
@@ -394,7 +426,21 @@ function executeImport(
   const results: TemperatureRecordImportResult['results'] = [];
   let successCount = 0;
   let failedCount = 0;
+  let skippedCount = 0;
   let exceptionCreatedCount = 0;
+
+  const skippedRecords = records.filter(r => r.status === 'unmatched');
+  for (const record of skippedRecords) {
+    results.push({
+      lineNumber: record.lineNumber,
+      orderNo: record.parsed.orderNo,
+      success: false,
+      isException: false,
+      isSkipped: true,
+      message: record.failureReasons.length > 0 ? record.failureReasons.join('; ') : '未匹配，已跳过',
+    });
+    skippedCount++;
+  }
 
   const validRecords = records.filter(r => r.status === 'importable' || r.status === 'abnormal');
 
@@ -407,6 +453,7 @@ function executeImport(
         orderNo: parsed.orderNo,
         success: false,
         isException: false,
+        isSkipped: false,
         message: '未找到匹配的订单或节点',
       });
       failedCount++;
@@ -430,6 +477,7 @@ function executeImport(
           orderNo: parsed.orderNo,
           success: true,
           isException: false,
+          isSkipped: false,
           nodeId: node.id,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
         });
@@ -464,6 +512,7 @@ function executeImport(
           orderNo: parsed.orderNo,
           success: true,
           isException: true,
+          isSkipped: false,
           nodeId: node.id,
           exceptionId,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
@@ -477,6 +526,7 @@ function executeImport(
         orderNo: parsed.orderNo,
         success: false,
         isException: false,
+        isSkipped: false,
         message: `导入失败: ${error instanceof Error ? error.message : '未知错误'}`,
       });
       failedCount++;
@@ -486,6 +536,7 @@ function executeImport(
   return {
     successCount,
     failedCount,
+    skippedCount,
     exceptionCreatedCount,
     results,
   };

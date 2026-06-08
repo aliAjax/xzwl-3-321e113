@@ -52,7 +52,14 @@ export const temperatureImportController = {
       }
 
       const result = temperatureImportService.executeImport(records as TemperatureRecordValidationResult[], operator);
-      return res.status(200).json({ message: '导入完成', ...result });
+      return res.status(200).json({
+        message: '导入完成',
+        successCount: result.successCount,
+        failedCount: result.failedCount,
+        skippedCount: result.skippedCount,
+        exceptionCreatedCount: result.exceptionCreatedCount,
+        results: result.results,
+      });
     } catch (error) {
       return res.status(500).json({ message: '导入失败', error: (error as Error).message });
     }

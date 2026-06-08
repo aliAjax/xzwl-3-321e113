@@ -551,6 +551,7 @@ export interface TemperatureRecordValidationResult {
   parsed: TemperatureRecordParsed;
   matched?: TemperatureRecordMatched;
   failureReasons: string[];
+  suggestedCorrectionFields: string[];
 }
 
 export interface TemperatureRecordImportPreview {
@@ -570,12 +571,14 @@ export interface TemperatureRecordImportRequest {
 export interface TemperatureRecordImportResult {
   successCount: number;
   failedCount: number;
+  skippedCount: number;
   exceptionCreatedCount: number;
   results: Array<{
     lineNumber: number;
     orderNo: string;
     success: boolean;
     isException: boolean;
+    isSkipped: boolean;
     nodeId?: string;
     exceptionId?: string;
     message: string;
