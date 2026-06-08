@@ -41,6 +41,7 @@ export const exceptionHandlingController = {
         escalationLevel: req.query.escalationLevel as EscalationLevel | undefined,
         assigneeId: req.query.assigneeId as string | undefined,
         isClosed: req.query.isClosed !== undefined ? req.query.isClosed === 'true' : undefined,
+        highPriority: req.query.highPriority !== undefined ? req.query.highPriority === 'true' : undefined,
         page: req.query.page ? parseInt(req.query.page as string) : 1,
         pageSize: req.query.pageSize ? parseInt(req.query.pageSize as string) : 20,
       };
@@ -287,6 +288,7 @@ export const exceptionHandlingController = {
         escalationLevel: req.query.escalationLevel as EscalationLevel | undefined,
         assigneeId: req.query.assigneeId as string | undefined,
         isClosed: req.query.isClosed !== undefined ? req.query.isClosed === 'true' : undefined,
+        highPriority: req.query.highPriority !== undefined ? req.query.highPriority === 'true' : undefined,
       };
       const stats = exceptionHandlingService.getStats(params);
       return res.status(200).json(stats);
@@ -307,6 +309,7 @@ export const exceptionHandlingController = {
         escalationLevel: req.query.escalationLevel as EscalationLevel | undefined,
         assigneeId: req.query.assigneeId as string | undefined,
         isClosed: req.query.isClosed !== undefined ? req.query.isClosed === 'true' : undefined,
+        highPriority: req.query.highPriority !== undefined ? req.query.highPriority === 'true' : undefined,
       };
       const stats = exceptionHandlingService.getWorkorderStats(params);
       return res.status(200).json(stats);

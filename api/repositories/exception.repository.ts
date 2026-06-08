@@ -525,7 +525,15 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     return handling as ExceptionHandlingWithDetails;
   }
 
-  createHandling(data: Omit<ExceptionHandling, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; createdAt?: string; updatedAt?: string }): ExceptionHandling {
+  createHandling(
+    data: Omit<ExceptionHandling, 'id' | 'createdAt' | 'updatedAt' | 'escalationLevel' | 'isClosed'> & {
+      id?: string;
+      createdAt?: string;
+      updatedAt?: string;
+      escalationLevel?: EscalationLevel;
+      isClosed?: boolean;
+    }
+  ): ExceptionHandling {
     const now = new Date().toISOString();
     const escalationLevel = data.escalationLevel || 'level_1' as EscalationLevel;
     
@@ -548,9 +556,9 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     const slaDeadline = this.calculateSlaDeadlineForHandling(tempHandling);
     
     const dataWithTimestamps = {
-      escalationLevel,
-      isClosed: false,
       ...data,
+      escalationLevel,
+      isClosed: data.isClosed || false,
       slaDeadline,
       createdAt: data.createdAt || now,
       updatedAt: data.updatedAt || now,
