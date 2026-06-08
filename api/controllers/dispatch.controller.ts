@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { dispatchService } from '../services/dispatch.service';
+import { orderRepository } from '../repositories/order.repository';
 import type {
   DispatchRequest,
   DispatchPreviewRequest,
@@ -199,6 +200,18 @@ export const dispatchController = {
       return res.status(200).json(detail);
     } catch (error) {
       return res.status(500).json({ message: '获取方案详情失败', error: (error as Error).message });
+    }
+  },
+
+  async getDispatchableOrders(req: Request, res: Response): Promise<Response> {
+    try {
+      const orders = orderRepository.findDispatchableOrders();
+      return res.status(200).json({
+        total: orders.length,
+        orders,
+      });
+    } catch (error) {
+      return res.status(500).json({ message: '获取可调度订单失败', error: (error as Error).message });
     }
   },
 };

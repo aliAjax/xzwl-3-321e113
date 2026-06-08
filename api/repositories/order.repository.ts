@@ -335,6 +335,17 @@ class OrderRepository extends BaseRepository<Order> {
       };
     }
   }
+
+  findDispatchableOrders(): Order[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM ${this.tableName} 
+         WHERE status IN ('created', 'warehoused')
+         ORDER BY scheduled_delivery_time ASC`
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map(row => this.fromDatabase(row));
+  }
 }
 
 export const orderRepository = new OrderRepository();

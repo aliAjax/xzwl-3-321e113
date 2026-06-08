@@ -83,9 +83,12 @@ function Dispatch() {
 
       if (orderIdsParam) {
         const orderIds = orderIdsParam.split(',')
-        const validOrderIds = orderIds.filter(id => orders.some(o => o.id === id))
-        if (validOrderIds.length > 0) {
-          setSelectedOrders(validOrderIds)
+        const dispatchableOrderIds = orderIds.filter(id => {
+          const order = orders.find(o => o.id === id)
+          return order && ['created', 'warehoused'].includes(order.status)
+        })
+        if (dispatchableOrderIds.length > 0) {
+          setSelectedOrders(dispatchableOrderIds)
         }
       }
 
@@ -109,13 +112,13 @@ function Dispatch() {
 
   async function loadData() {
     try {
-      const [ordersData, vehiclesData, driversData, routesData] = await Promise.all([
-        api.get<Order[]>('/orders?status=created'),
+      const [ordersResponse, vehiclesData, driversData, routesData] = await Promise.all([
+        api.get<{ total: number; orders: Order[] }>('/dispatch/orders/dispatchable'),
         api.get<Vehicle[]>('/vehicles?status=active'),
         api.get<Driver[]>('/drivers?status=on_duty'),
         api.get<Route[]>('/routes'),
       ])
-      setOrders(ordersData)
+      setOrders(ordersResponse.orders)
       setVehicles(vehiclesData)
       setDrivers(driversData)
       setRoutes(routesData)
@@ -300,8 +303,12 @@ function Dispatch() {
                 <Layers size={20} className="text-purple-600" />
               </div>
               <div>
-                <p className="font-medium text-purple-800">已从调度沙盘带入方案</p>
-                <p className="text-sm text-purple-600">系统已自动填充车辆、司机、线路和时间信息，请确认后执行调度</p>
+                <p className="font-medium text-purple-800">
+                  已从调度沙盘带入方案 · {selectedOrders.length} 个可调度订单
+                </p>
+                <p className="text-sm text-purple-600">
+                  系统已自动过滤不可调度订单，并填充车辆、司机、线路和时间信息，请确认后执行调度
+                </p>
               </div>
             </div>
             <button

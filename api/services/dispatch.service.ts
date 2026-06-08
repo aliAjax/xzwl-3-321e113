@@ -24,6 +24,7 @@ import type {
   DispatchSandboxResult,
   DispatchSandboxPlan,
   DispatchSandboxPlanDetail,
+  DispatchSandboxFilteredOrder,
 } from '../../shared/types';
 
 function generateBatchNo(): string {
@@ -664,13 +665,24 @@ export const dispatchService = {
   generateSandboxPlans(request: DispatchSandboxGenerateRequest): DispatchSandboxResult {
     const { orderIds, scheduledDepartureTime, maxPlans = 10 } = request;
 
-    const orders = orderIds
+    const allOrders = orderIds
       .map(id => orderRepository.findById(id))
       .filter((o): o is Order => o !== undefined);
 
-    if (orders.length === 0) {
+    if (allOrders.length === 0) {
       throw new Error('未找到有效的订单');
     }
+
+    const dispatchableOrders = allOrders.filter(o => ['created', 'warehoused'].includes(o.status));
+    const nonDispatchableOrders = allOrders.filter(o => !['created', 'warehoused'].includes(o.status));
+
+    if (dispatchableOrders.length === 0) {
+      const orderNos = nonDispatchableOrders.map(o => `${o.orderNo}(${o.status})`).join(', ');
+      throw new Error(`没有可调度的订单，以下订单状态不正确：${orderNos}。需要状态为 created 或 warehoused。`);
+    }
+
+    const orders = dispatchableOrders;
+    const dispatchableOrderIds = dispatchableOrders.map(o => o.id);
 
     const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
     const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
@@ -686,10 +698,17 @@ export const dispatchService = {
 
     const scheduledTime = scheduledDepartureTime || new Date().toISOString();
 
+    const filteredOrders: DispatchSandboxFilteredOrder[] = nonDispatchableOrders.map(o => ({
+      id: o.id,
+      orderNo: o.orderNo,
+      status: o.status,
+      reason: `订单状态为 ${o.status}，需要为 created 或 warehoused`,
+    }));
+
     const plans: DispatchSandboxPlan[] = [];
     let planIndex = 0;
 
-    const matchResults = this.findMatchingVehicles(orderIds, scheduledTime);
+    const matchResults = this.findMatchingVehicles(dispatchableOrderIds, scheduledTime);
 
     for (const match of matchResults) {
       const vehicle = activeVehicles.find(v => v.id === match.vehicleId);
@@ -701,7 +720,7 @@ export const dispatchService = {
 
         try {
           const previewRequest: DispatchPreviewRequest = {
-            orderIds,
+            orderIds: dispatchableOrderIds,
             vehicleId: vehicle.id,
             driverId: driver.id,
             routeId: route.id,
@@ -765,7 +784,7 @@ export const dispatchService = {
 
             try {
               const previewRequest: DispatchPreviewRequest = {
-                orderIds,
+                orderIds: dispatchableOrderIds,
                 vehicleId: vehicle.id,
                 driverId: driver.id,
                 routeId: route.id,
@@ -830,10 +849,12 @@ export const dispatchService = {
     });
 
     return {
-      totalOrders: orders.length,
+      totalOrders: allOrders.length,
+      dispatchableOrders: dispatchableOrders.length,
       totalWeight,
       totalQuantity,
       requiredTemperatureZones: requiredZones,
+      filteredOrders,
       plans,
     };
   },
@@ -864,8 +885,15 @@ export const dispatchService = {
     planId: string,
     planName: string
   ): DispatchSandboxPlanDetail {
+    const allOrders = orderIds
+      .map(id => orderRepository.findById(id))
+      .filter((o): o is Order => o !== undefined);
+
+    const dispatchableOrders = allOrders.filter(o => ['created', 'warehoused'].includes(o.status));
+    const dispatchableOrderIds = dispatchableOrders.map(o => o.id);
+
     const previewRequest: DispatchPreviewRequest = {
-      orderIds,
+      orderIds: dispatchableOrderIds,
       vehicleId,
       driverId,
       routeId,
@@ -877,9 +905,7 @@ export const dispatchService = {
     const driver = driverRepository.findById(driverId);
     const route = routeRepository.findById(routeId);
 
-    const orders = orderIds
-      .map(id => orderRepository.findById(id))
-      .filter((o): o is Order => o !== undefined);
+    const orders = dispatchableOrders;
 
     const { score } = this.calculateMatchScore(
       vehicle!,

@@ -12,6 +12,7 @@ router.get('/active', authMiddleware, requireRoles('admin', 'dispatcher'), dispa
 router.get('/date-range', authMiddleware, requireRoles('admin', 'dispatcher'), dispatchController.getByDateRange);
 router.get('/:id', authMiddleware, requireRoles('admin', 'dispatcher'), dispatchController.getById);
 router.post('/:batchId/cancel', authMiddleware, requireRoles('admin', 'dispatcher'), dispatchController.cancel);
+router.get('/orders/dispatchable', authMiddleware, requireRoles('admin', 'dispatcher'), dispatchController.getDispatchableOrders);
 router.post('/sandbox/generate', authMiddleware, requireRoles('admin', 'dispatcher'), dispatchController.generateSandboxPlans);
 router.post('/sandbox/detail', authMiddleware, requireRoles('admin', 'dispatcher'), dispatchController.getSandboxPlanDetail);
 

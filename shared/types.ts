@@ -524,11 +524,20 @@ export interface DispatchSandboxPlanDetail extends DispatchPreviewResult {
   } | null;
 }
 
+export interface DispatchSandboxFilteredOrder {
+  id: string;
+  orderNo: string;
+  status: string;
+  reason: string;
+}
+
 export interface DispatchSandboxResult {
   totalOrders: number;
+  dispatchableOrders: number;
   totalWeight: number;
   totalQuantity: number;
   requiredTemperatureZones: TemperatureZone[];
+  filteredOrders: DispatchSandboxFilteredOrder[];
   plans: DispatchSandboxPlan[];
 }
 

@@ -32,6 +32,7 @@ import type {
   DispatchSandboxResult,
   DispatchSandboxPlan,
   DispatchSandboxPlanDetail,
+  DispatchSandboxFilteredOrder,
   DispatchPreviewConflict,
   DispatchPreviewSuggestion,
   TemperatureZone,
@@ -52,6 +53,8 @@ function DispatchSandbox() {
   const [planDetail, setPlanDetail] = useState<DispatchSandboxPlanDetail | null>(null)
   const [showDetail, setShowDetail] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [filteredOrders, setFilteredOrders] = useState<DispatchSandboxFilteredOrder[]>([])
+  const [showFilteredOrders, setShowFilteredOrders] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -59,8 +62,8 @@ function DispatchSandbox() {
 
   async function loadData() {
     try {
-      const ordersData = await api.get<Order[]>('/orders?status=created')
-      setOrders(ordersData)
+      const response = await api.get<{ total: number; orders: Order[] }>('/dispatch/orders/dispatchable')
+      setOrders(response.orders)
     } catch (error) {
       console.error('Failed to load sandbox data:', error)
     } finally {
@@ -76,6 +79,8 @@ function DispatchSandbox() {
 
     setGenerating(true)
     setSandboxResult(null)
+    setFilteredOrders([])
+    setShowFilteredOrders(false)
     try {
       const result = await api.post<DispatchSandboxResult>('/dispatch/sandbox/generate', {
         orderIds: selectedOrders,
@@ -83,6 +88,10 @@ function DispatchSandbox() {
         maxPlans,
       })
       setSandboxResult(result)
+      setFilteredOrders(result.filteredOrders)
+      if (result.filteredOrders.length > 0) {
+        setShowFilteredOrders(true)
+      }
     } catch (error) {
       console.error('Generate plans failed:', error)
       alert(error instanceof Error ? error.message : '生成方案失败')
@@ -96,8 +105,12 @@ function DispatchSandbox() {
     setLoadingDetail(true)
     setShowDetail(true)
     try {
+      const dispatchableSelectedOrders = orders
+        .filter(o => selectedOrders.includes(o.id) && ['created', 'warehoused'].includes(o.status))
+        .map(o => o.id)
+
       const detail = await api.post<DispatchSandboxPlanDetail>('/dispatch/sandbox/detail', {
-        orderIds: selectedOrders,
+        orderIds: dispatchableSelectedOrders,
         vehicleId: plan.vehicleId,
         driverId: plan.driverId,
         routeId: plan.routeId,
@@ -115,8 +128,17 @@ function DispatchSandbox() {
   }
 
   function handleApplyToDispatch(plan: DispatchSandboxPlan) {
+    const dispatchableSelectedOrders = orders
+      .filter(o => selectedOrders.includes(o.id) && ['created', 'warehoused'].includes(o.status))
+      .map(o => o.id)
+
+    if (dispatchableSelectedOrders.length === 0) {
+      alert('没有可调度的订单，无法带入正式调度')
+      return
+    }
+
     const params = new URLSearchParams({
-      orderIds: selectedOrders.join(','),
+      orderIds: dispatchableSelectedOrders.join(','),
       vehicleId: plan.vehicleId,
       driverId: plan.driverId,
       routeId: plan.routeId,
@@ -242,6 +264,10 @@ function DispatchSandbox() {
                 待模拟订单
               </h2>
               <div className="flex items-center gap-4">
+                <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full flex items-center gap-1">
+                  <CheckCircle size={12} />
+                  仅显示可调度订单
+                </span>
                 <button
                   onClick={toggleSelectAll}
                   className="text-sm text-blue-600 hover:text-blue-700"
@@ -253,6 +279,37 @@ function DispatchSandbox() {
                 </span>
               </div>
             </div>
+
+            {showFilteredOrders && filteredOrders.length > 0 && (
+              <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-yellow-600" />
+                    <span className="font-medium text-yellow-800">
+                      以下 {filteredOrders.length} 个订单因状态不正确已被过滤
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowFilteredOrders(false)}
+                    className="text-yellow-600 hover:text-yellow-800"
+                  >
+                    <XCircle size={16} />
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {filteredOrders.map((fo) => (
+                    <div
+                      key={fo.id}
+                      className="flex items-center justify-between text-sm p-2 bg-yellow-100/50 rounded"
+                    >
+                      <span className="text-yellow-800">{fo.orderNo}</span>
+                      <span className="text-yellow-600 text-xs">{fo.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
               {orders.length > 0 ? (
                 orders.map((order) => {
@@ -575,9 +632,25 @@ function DispatchSandbox() {
               </h3>
               <div className="space-y-3">
                 <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                  <span className="text-sm text-gray-600">订单数量</span>
+                  <span className="text-sm text-gray-600">选中订单</span>
                   <span className="font-semibold text-gray-800">{sandboxResult.totalOrders} 单</span>
                 </div>
+                <div className="flex justify-between items-center p-2 bg-green-50 rounded">
+                  <span className="text-sm text-green-700 flex items-center gap-1">
+                    <CheckCircle size={14} />
+                    可调度订单
+                  </span>
+                  <span className="font-semibold text-green-700">{sandboxResult.dispatchableOrders} 单</span>
+                </div>
+                {sandboxResult.filteredOrders.length > 0 && (
+                  <div className="flex justify-between items-center p-2 bg-yellow-50 rounded">
+                    <span className="text-sm text-yellow-700 flex items-center gap-1">
+                      <AlertTriangle size={14} />
+                      已过滤
+                    </span>
+                    <span className="font-semibold text-yellow-700">{sandboxResult.filteredOrders.length} 单</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
                   <span className="text-sm text-gray-600">总重量</span>
                   <span className="font-semibold text-gray-800">{sandboxResult.totalWeight} kg</span>
