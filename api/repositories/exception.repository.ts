@@ -53,6 +53,7 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     updatedAt: 'updated_at',
   };
   protected jsonFields: Array<keyof ExceptionHandling> = ['processingNotes'];
+  protected booleanFields: Array<keyof ExceptionHandling> = ['isClosed'];
 
   findByNodeId(nodeId: string): ExceptionHandling | undefined {
     return this.findOneByField('nodeId', nodeId);

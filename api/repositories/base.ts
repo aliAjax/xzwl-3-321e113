@@ -14,6 +14,7 @@ export abstract class BaseRepository<T extends { id: string }> {
   protected abstract tableName: string;
   protected abstract fieldMap: Record<keyof T, string>;
   protected abstract jsonFields: Array<keyof T>;
+  protected booleanFields: Array<keyof T> = [];
 
   protected toDatabase(data: Partial<T>): Record<string, unknown> {
     const result: Record<string, unknown> = {};
@@ -22,6 +23,8 @@ export abstract class BaseRepository<T extends { id: string }> {
       if (dbField && value !== undefined) {
         if (this.jsonFields.includes(key as keyof T)) {
           result[dbField] = JSON.stringify(value);
+        } else if (typeof value === 'boolean') {
+          result[dbField] = value ? 1 : 0;
         } else {
           result[dbField] = value;
         }
@@ -38,6 +41,8 @@ export abstract class BaseRepository<T extends { id: string }> {
           result[tsField] = typeof row[dbField] === 'string' 
             ? JSON.parse(row[dbField] as string) 
             : row[dbField];
+        } else if (this.booleanFields.includes(tsField as keyof T)) {
+          result[tsField] = row[dbField] === 1 || row[dbField] === true;
         } else {
           result[tsField] = row[dbField];
         }
