@@ -25,7 +25,7 @@ const migrations = [
   },
   {
     name: '添加 updated_at 字段到 delivery_nodes',
-    sql: `ALTER TABLE delivery_nodes ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
+    sql: `ALTER TABLE delivery_nodes ADD COLUMN updated_at DATETIME`,
   },
   {
     name: '为现有记录填充 updated_at',

@@ -22,6 +22,29 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
   };
   protected jsonFields: Array<keyof DeliveryNode> = [];
 
+  private updateWithVersionBump(
+    id: string,
+    data: Partial<Omit<DeliveryNode, 'id' | 'createdAt'>>
+  ): DeliveryNode | undefined {
+    const dbData = this.toDatabase(data as Partial<DeliveryNode>);
+    delete dbData.version;
+
+    if (Object.keys(dbData).length === 0) {
+      return this.findById(id);
+    }
+
+    const setClause = Object.keys(dbData).map(field => `${field} = ?`).join(', ');
+    const values = [...Object.values(dbData), id];
+    const sql = `UPDATE ${this.tableName} SET ${setClause}, version = COALESCE(version, 1) + 1 WHERE id = ?`;
+    const result = this.db.prepare(sql).run(...values);
+
+    if (result.changes === 0) {
+      return undefined;
+    }
+
+    return this.findById(id);
+  }
+
   findByTaskId(taskId: string): DeliveryNode[] {
     return this.findByField('taskId', taskId, { orderBy: 'createdAt', orderDir: 'ASC' });
   }
@@ -147,7 +170,7 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
             temperature = ?,
             exception_description = ?,
             client_submit_id = ?,
-            version = version + 1,
+            version = COALESCE(version, 1) + 1,
             updated_at = ?
           WHERE id = ? AND version = ?`
         )
@@ -170,7 +193,7 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
       return this.findById(id);
     }
 
-    return this.update(id, {
+    return this.updateWithVersionBump(id, {
       status,
       recordedAt: now,
       locationText: data.locationText,
@@ -189,7 +212,7 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
     if (status === 'in_progress') {
       updates.recordedAt = new Date().toISOString();
     }
-    return this.update(id, updates);
+    return this.updateWithVersionBump(id, updates);
   }
 
   countByTaskIdAndStatus(taskId: string, status: NodeStatus): number {
@@ -221,7 +244,7 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
       ...data,
       updatedAt: new Date().toISOString(),
     };
-    return this.update(id, updates);
+    return this.updateWithVersionBump(id, updates);
   }
 
   mapFromDatabase(row: Record<string, unknown>): DeliveryNode {
