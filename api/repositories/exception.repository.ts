@@ -165,6 +165,11 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
       sqlParams.push(params.isClosed ? 1 : 0);
     }
 
+    if (params.highPriority) {
+      conditions.push('(eh.escalation_level = ? OR (eh.sla_deadline IS NOT NULL AND datetime(eh.sla_deadline) < datetime(\'now\') AND eh.is_closed = 0))');
+      sqlParams.push('level_3');
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const sql = `
@@ -207,42 +212,24 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     return rows.map(row => this.fromDatabase(row));
   }
 
-  autoEscalateOverdue(): { updated: number; alreadyLevel3: number } {
+  autoEscalateOverdue(): { totalOverdue: number; level3Count: number; needsAttention: number } {
     const overdue = this.findOverdueExceptions();
-    let updated = 0;
-    let alreadyLevel3 = 0;
-    const now = new Date().toISOString();
+    let level3Count = 0;
+    let needsAttention = 0;
 
     for (const handling of overdue) {
       if (handling.escalationLevel === 'level_3') {
-        alreadyLevel3++;
-        continue;
+        level3Count++;
+      } else {
+        needsAttention++;
       }
-
-      const newLevel: EscalationLevel = handling.escalationLevel === 'level_1' ? 'level_2' : 'level_3';
-      
-      this.db
-        .prepare(
-          `UPDATE ${this.tableName} 
-           SET escalation_level = ?, updated_at = ?, sla_deadline = ?
-           WHERE id = ?`
-        )
-        .run(newLevel, now, this.calculateSlaDeadlineForHandling({ ...handling, escalationLevel: newLevel }), handling.id);
-
-      processingNoteRepository.addNoteWithAction(
-        handling.id,
-        'SLA超时自动升级',
-        'escalate',
-        undefined,
-        '系统',
-        handling.escalationLevel,
-        newLevel
-      );
-
-      updated++;
     }
 
-    return { updated, alreadyLevel3 };
+    return {
+      totalOverdue: overdue.length,
+      level3Count,
+      needsAttention,
+    };
   }
 
   countByEscalationLevel(escalationLevel: EscalationLevel): number {
@@ -305,6 +292,11 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     if (params.isClosed !== undefined) {
       conditions.push('eh.is_closed = ?');
       sqlParams.push(params.isClosed ? 1 : 0);
+    }
+
+    if (params.highPriority) {
+      conditions.push('(eh.escalation_level = ? OR (eh.sla_deadline IS NOT NULL AND datetime(eh.sla_deadline) < datetime(\'now\') AND eh.is_closed = 0))');
+      sqlParams.push('level_3');
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -785,6 +777,11 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
     if (params.isClosed !== undefined) {
       conditions.push('is_closed = ?');
       sqlParams.push(params.isClosed ? 1 : 0);
+    }
+
+    if (params.highPriority) {
+      conditions.push('(escalation_level = ? OR (sla_deadline IS NOT NULL AND datetime(sla_deadline) < datetime(\'now\') AND is_closed = 0))');
+      sqlParams.push('level_3');
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

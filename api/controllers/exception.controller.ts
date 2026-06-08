@@ -372,11 +372,11 @@ export const exceptionHandlingController = {
     try {
       const result = exceptionHandlingService.autoEscalateOverdue();
       return res.status(200).json({
-        message: `自动升级完成，升级 ${result.updated} 条，已是最高级别 ${result.alreadyLevel3} 条`,
+        message: `SLA统计完成，超时工单共 ${result.totalOverdue} 条，其中L3 ${result.level3Count} 条，需关注 ${result.needsAttention} 条`,
         ...result,
       });
     } catch (error) {
-      return res.status(500).json({ message: '自动升级失败', error: (error as Error).message });
+      return res.status(500).json({ message: 'SLA统计失败', error: (error as Error).message });
     }
   },
 };

@@ -115,6 +115,7 @@ function ExceptionHandling() {
     escalationLevel: EscalationLevel | ''
     assigneeId: string
     isClosed: '' | 'true' | 'false'
+    highPriority: boolean
     page: number
     pageSize: number
   }>({
@@ -127,6 +128,7 @@ function ExceptionHandling() {
     escalationLevel: '',
     assigneeId: '',
     isClosed: '',
+    highPriority: false,
     page: 1,
     pageSize: 20,
   })
@@ -193,6 +195,7 @@ function ExceptionHandling() {
       if (currentFilters.escalationLevel) params.escalationLevel = currentFilters.escalationLevel
       if (currentFilters.assigneeId) params.assigneeId = currentFilters.assigneeId
       if (currentFilters.isClosed !== '') params.isClosed = currentFilters.isClosed as string
+      if (currentFilters.highPriority) params.highPriority = 'true'
 
       const queryString = new URLSearchParams(params).toString()
       const data = await api.get<ExceptionHandlingWorkorderStats>(`/exceptions/workorder-stats?${queryString}`)
@@ -215,6 +218,7 @@ function ExceptionHandling() {
       escalationLevel: '',
       assigneeId: '',
       isClosed: '',
+      highPriority: false,
       page: 1,
       pageSize: 20,
     }
@@ -231,7 +235,7 @@ function ExceptionHandling() {
     } else if (view === 'high_priority_unclosed') {
       newFilters = {
         ...baseFilters,
-        escalationLevel: 'level_3',
+        highPriority: true,
         isClosed: 'false',
       }
     }
@@ -266,6 +270,7 @@ function ExceptionHandling() {
       if (filters.escalationLevel) params.escalationLevel = filters.escalationLevel
       if (filters.assigneeId) params.assigneeId = filters.assigneeId
       if (filters.isClosed !== '') params.isClosed = filters.isClosed === 'true'
+      if (filters.highPriority) params.highPriority = true
       params.page = filters.page
       params.pageSize = filters.pageSize
 
@@ -452,6 +457,7 @@ function ExceptionHandling() {
       escalationLevel: '',
       assigneeId: '',
       isClosed: '',
+      highPriority: false,
       page: 1,
       pageSize: 20,
     }

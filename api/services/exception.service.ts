@@ -51,7 +51,7 @@ export const exceptionHandlingService = {
     };
   },
 
-  autoEscalateOverdue(): { updated: number; alreadyLevel3: number } {
+  autoEscalateOverdue(): { totalOverdue: number; level3Count: number; needsAttention: number } {
     return exceptionHandlingRepository.autoEscalateOverdue();
   },
 

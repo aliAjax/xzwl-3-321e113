@@ -504,6 +504,7 @@ export interface ExceptionHandlingQueryParams {
   escalationLevel?: EscalationLevel;
   assigneeId?: string;
   isClosed?: boolean;
+  highPriority?: boolean;
   page?: number;
   pageSize?: number;
 }
