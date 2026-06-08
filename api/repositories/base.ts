@@ -33,7 +33,7 @@ export abstract class BaseRepository<T extends { id: string }> {
   protected fromDatabase(row: Record<string, unknown>): T {
     const result: Record<string, unknown> = {};
     for (const [tsField, dbField] of Object.entries(this.fieldMap)) {
-      if (row[dbField] !== undefined) {
+      if (row[dbField] !== undefined && row[dbField] !== null) {
         if (this.jsonFields.includes(tsField as keyof T)) {
           result[tsField] = typeof row[dbField] === 'string' 
             ? JSON.parse(row[dbField] as string) 
