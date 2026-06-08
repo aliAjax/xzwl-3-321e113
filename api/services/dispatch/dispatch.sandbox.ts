@@ -16,6 +16,7 @@ import {
 } from './dispatch.constants';
 import { MatchingRepositories, calculateMatchScore, findMatchingVehicles, calculateRouteMatchScore } from './dispatch.matching';
 import { PreviewRepositories, previewDispatch } from './dispatch.preview';
+import { checkTemperatureMatch } from './dispatch.validation';
 
 export interface SandboxRepositories extends MatchingRepositories, PreviewRepositories {
   findAllRoutes: () => Route[];
@@ -183,7 +184,7 @@ export function generateSandboxPlans(
               vehicleCapacityPercent: preview.vehicleCapacityPercent,
               temperatureZones: preview.temperatureZones,
               vehicleTemperatureZones: vehicle.temperatureZones,
-              temperatureMatch: preview.vehicle ? preview.vehicle.temperatureZones.some(z => requiredZones.includes(z)) : false,
+              temperatureMatch: checkTemperatureMatch(vehicle, requiredZones),
               stopCount: route.stops.length,
               estimatedDurationMinutes: preview.estimatedDurationMinutes,
               estimatedArrivalTime: preview.estimatedArrivalTime,
