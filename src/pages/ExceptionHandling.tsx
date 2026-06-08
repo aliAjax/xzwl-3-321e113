@@ -227,9 +227,7 @@ function ExceptionHandling() {
   }
 
   function updateFilters(updates: Partial<typeof filters>) {
-    if (activeQuickView !== 'all') {
-      setActiveQuickView('all')
-    }
+    setActiveQuickView(prev => prev !== 'all' ? 'all' : prev)
     setFilters({ ...filters, ...updates })
   }
 
