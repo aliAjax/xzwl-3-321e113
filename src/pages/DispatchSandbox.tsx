@@ -270,6 +270,62 @@ function DispatchSandbox() {
     return values.some((v) => v !== first)
   }
 
+  function getCompareFieldValues<T>(
+    extractor: (detail: DispatchSandboxPlanDetail, plan: DispatchSandboxPlan) => T
+  ): T[] {
+    return selectedPlanIdsForCompare
+      .map((planId) => {
+        const plan = getComparePlan(planId)
+        const detail = getPlanCompareDetail(planId)
+        if (!plan || !detail) return undefined
+        return extractor(detail, plan)
+      })
+      .filter((v): v is T => v !== undefined)
+  }
+
+  function checkFieldDiff<T extends string | number | boolean | undefined>(
+    extractor: (detail: DispatchSandboxPlanDetail, plan: DispatchSandboxPlan) => T
+  ): boolean {
+    const values = getCompareFieldValues(extractor)
+    return hasDifference(values)
+  }
+
+  function getDiffHighlightClass(hasDiff: boolean): string {
+    return hasDiff ? 'ring-2 ring-amber-400 bg-amber-50' : ''
+  }
+
+  function getArrayDiffCount<T>(
+    extractor: (detail: DispatchSandboxPlanDetail, plan: DispatchSandboxPlan) => T[]
+  ): { counts: number[]; hasDiff: boolean } {
+    const values = getCompareFieldValues(extractor)
+    const counts = values.map((v) => v.length)
+    return {
+      counts,
+      hasDiff: hasDifference(counts as (string | number | boolean | undefined)[]),
+    }
+  }
+
+  function getConflictTypeCounts(
+    detail: DispatchSandboxPlanDetail
+  ): Record<string, number> {
+    const counts: Record<string, number> = {}
+    detail.conflicts.forEach((c) => {
+      counts[c.type] = (counts[c.type] || 0) + 1
+      counts[c.severity] = (counts[c.severity] || 0) + 1
+    })
+    return counts
+  }
+
+  function getSuggestionTypeCounts(
+    detail: DispatchSandboxPlanDetail
+  ): Record<string, number> {
+    const counts: Record<string, number> = {}
+    detail.suggestions.forEach((s) => {
+      counts[s.type] = (counts[s.type] || 0) + 1
+    })
+    return counts
+  }
+
   const filteredOrdersList = orders.filter((order) => {
     if (filterCustomerId && order.customerId !== filterCustomerId) {
       return false
@@ -1429,15 +1485,39 @@ function DispatchSandbox() {
                   'grid gap-6',
                   selectedPlanIdsForCompare.length === 2 ? 'grid-cols-2' : 'grid-cols-3'
                 )}>
-                  {selectedPlanIdsForCompare.map((planId) => {
+                  {selectedPlanIdsForCompare.map((planId, planIndex) => {
                     const plan = getComparePlan(planId)
                     const detail = getPlanCompareDetail(planId)
                     if (!plan) return null
 
+                    const diffTotalWeight = checkFieldDiff((d) => d.totalWeight)
+                    const diffTotalQuantity = checkFieldDiff((d) => d.totalQuantity)
+                    const diffDuration = checkFieldDiff((d) => d.estimatedDurationMinutes)
+                    const diffCapacityPercent = checkFieldDiff((d) => d.vehicleCapacityPercent)
+                    const diffVehicle = checkFieldDiff((d) => d.vehicle?.plateNo)
+                    const diffVehicleType = checkFieldDiff((d) => d.vehicle?.vehicleType)
+                    const diffVehicleCapacity = checkFieldDiff((d) => d.vehicle?.capacity)
+                    const diffVehicleTime = checkFieldDiff((d) => `${d.vehicle?.availableStartTime}-${d.vehicle?.availableEndTime}`)
+                    const diffDriver = checkFieldDiff((d) => d.driver?.name)
+                    const diffDriverStatus = checkFieldDiff((d) => d.driver?.status)
+                    const diffRoute = checkFieldDiff((d) => d.route?.name)
+                    const diffRouteStops = checkFieldDiff((d) => d.route?.stopCount)
+                    const diffTempZones = checkFieldDiff((d) => JSON.stringify(d.temperatureZones.sort()))
+                    const diffVehicleTempZones = checkFieldDiff((d) => JSON.stringify(d.vehicle?.temperatureZones.sort()))
+                    const diffDepartureTime = checkFieldDiff((d) => d.scheduledDepartureTime)
+                    const diffArrivalTime = checkFieldDiff((d) => d.estimatedArrivalTime)
+                    const diffCanDispatch = checkFieldDiff((_, p) => p.canDispatch)
+                    const diffScore = checkFieldDiff((_, p) => p.score)
+
+                    const { hasDiff: diffConflictCount } = getArrayDiffCount((d) => d.conflicts)
+                    const { hasDiff: diffWarningCount } = getArrayDiffCount((d) => d.warnings)
+                    const { hasDiff: diffSuggestionCount } = getArrayDiffCount((d) => d.suggestions)
+
                     return (
                       <div key={planId} className="space-y-4">
                         <div className={clsx(
-                          'p-4 rounded-xl border-2',
+                          'p-4 rounded-xl border-2 transition-all',
+                          diffCanDispatch || diffScore ? 'ring-2 ring-amber-400' : '',
                           plan.canDispatch
                             ? 'border-green-200 bg-green-50'
                             : 'border-yellow-200 bg-yellow-50'
@@ -1451,23 +1531,37 @@ function DispatchSandbox() {
                             >
                               {plan.planName.replace('方案 ', '')}
                             </span>
-                            <div>
+                            <div className="flex-1">
                               <p className="font-bold text-gray-800 text-lg">{plan.planName}</p>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 {plan.canDispatch ? (
-                                  <span className="text-xs text-green-600 flex items-center gap-1">
+                                  <span className={clsx(
+                                    'text-xs flex items-center gap-1',
+                                    diffCanDispatch ? 'text-amber-600 font-medium' : 'text-green-600'
+                                  )}>
                                     <CheckCircle size={12} />
                                     可调度
                                   </span>
                                 ) : (
-                                  <span className="text-xs text-yellow-600 flex items-center gap-1">
+                                  <span className={clsx(
+                                    'text-xs flex items-center gap-1',
+                                    diffCanDispatch ? 'text-amber-600 font-medium' : 'text-yellow-600'
+                                  )}>
                                     <AlertTriangle size={12} />
                                     存在冲突
                                   </span>
                                 )}
-                                <span className="text-xs text-gray-500">
+                                <span className={clsx(
+                                  'text-xs',
+                                  diffScore ? 'text-amber-600 font-medium' : 'text-gray-500'
+                                )}>
                                   匹配度 {plan.score}%
                                 </span>
+                                {(diffCanDispatch || diffScore) && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                    有差异
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1481,46 +1575,85 @@ function DispatchSandbox() {
                                 核心指标
                               </h4>
                               <div className="grid grid-cols-2 gap-3">
-                                <div className="bg-white rounded p-2">
+                                <div className={clsx(
+                                  'bg-white rounded p-2 transition-all',
+                                  getDiffHighlightClass(diffTotalWeight)
+                                )}>
                                   <p className="text-xs text-gray-500">总重量</p>
                                   <p className="font-bold text-gray-800">{detail.totalWeight} kg</p>
+                                  {diffTotalWeight && <p className="text-[10px] text-amber-600 mt-0.5">与其他方案不同</p>}
                                 </div>
-                                <div className="bg-white rounded p-2">
+                                <div className={clsx(
+                                  'bg-white rounded p-2 transition-all',
+                                  getDiffHighlightClass(diffTotalQuantity)
+                                )}>
                                   <p className="text-xs text-gray-500">总件数</p>
                                   <p className="font-bold text-gray-800">{detail.totalQuantity} 件</p>
+                                  {diffTotalQuantity && <p className="text-[10px] text-amber-600 mt-0.5">与其他方案不同</p>}
                                 </div>
-                                <div className="bg-white rounded p-2">
+                                <div className={clsx(
+                                  'bg-white rounded p-2 transition-all',
+                                  getDiffHighlightClass(diffDuration)
+                                )}>
                                   <p className="text-xs text-gray-500">预计耗时</p>
                                   <p className="font-bold text-orange-600">
                                     {formatDurationMinutes(detail.estimatedDurationMinutes)}
                                   </p>
+                                  {diffDuration && <p className="text-[10px] text-amber-600 mt-0.5">与其他方案不同</p>}
                                 </div>
-                                <div className="bg-white rounded p-2">
+                                <div className={clsx(
+                                  'bg-white rounded p-2 transition-all',
+                                  getDiffHighlightClass(diffCapacityPercent)
+                                )}>
                                   <p className="text-xs text-gray-500">容量使用</p>
                                   <p className={clsx('font-bold', getCapacityColor(detail.vehicleCapacityPercent))}>
                                     {detail.vehicleCapacityPercent}%
                                   </p>
+                                  {diffCapacityPercent && <p className="text-[10px] text-amber-600 mt-0.5">与其他方案不同</p>}
                                 </div>
                               </div>
                             </div>
 
-                            <div className="bg-gray-50 rounded-lg p-4">
+                            <div className={clsx(
+                              'bg-gray-50 rounded-lg p-4 transition-all',
+                              (diffVehicle || diffVehicleType || diffVehicleCapacity || diffVehicleTime || diffVehicleTempZones) ? 'ring-2 ring-amber-300' : ''
+                            )}>
                               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                 <Truck size={16} className="text-blue-500" />
                                 车辆信息
+                                {(diffVehicle || diffVehicleType || diffVehicleCapacity || diffVehicleTime || diffVehicleTempZones) && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                    有差异
+                                  </span>
+                                )}
                               </h4>
                               {detail.vehicle ? (
                                 <div className="space-y-2">
-                                  <p className="font-medium text-gray-800">
+                                  <p className={clsx(
+                                    'font-medium text-gray-800 p-1.5 rounded',
+                                    getDiffHighlightClass(diffVehicle || diffVehicleType)
+                                  )}>
                                     {detail.vehicle.plateNo} ({detail.vehicle.vehicleType})
+                                    {(diffVehicle || diffVehicleType) && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
                                   </p>
-                                  <p className="text-sm text-gray-600">
+                                  <p className={clsx(
+                                    'text-sm text-gray-600 p-1.5 rounded',
+                                    getDiffHighlightClass(diffVehicleCapacity)
+                                  )}>
                                     载重：{detail.vehicle.capacity}kg
+                                    {diffVehicleCapacity && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
                                   </p>
-                                  <p className="text-sm text-gray-600">
+                                  <p className={clsx(
+                                    'text-sm text-gray-600 p-1.5 rounded',
+                                    getDiffHighlightClass(diffVehicleTime)
+                                  )}>
                                     可用时间：{detail.vehicle.availableStartTime}-{detail.vehicle.availableEndTime}
+                                    {diffVehicleTime && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
                                   </p>
-                                  <div>
+                                  <div className={clsx(
+                                    'p-1.5 rounded',
+                                    getDiffHighlightClass(diffCapacityPercent)
+                                  )}>
                                     <div className="flex justify-between text-xs text-gray-500 mb-1">
                                       <span>容量使用</span>
                                       <span>{detail.vehicleCapacityUsed}kg / {detail.vehicle.capacity}kg</span>
@@ -1532,15 +1665,21 @@ function DispatchSandbox() {
                                       />
                                     </div>
                                   </div>
-                                  <div className="flex flex-wrap gap-1">
-                                    {detail.vehicle.temperatureZones.map((zone) => {
-                                      const info = formatTemperatureZone(zone as TemperatureZone)
-                                      return (
-                                        <span key={zone} className={clsx('status-badge text-xs', info.color)}>
-                                          {info.label}
-                                        </span>
-                                      )
-                                    })}
+                                  <div className={clsx(
+                                    'p-1.5 rounded',
+                                    getDiffHighlightClass(diffVehicleTempZones)
+                                  )}>
+                                    <div className="flex flex-wrap gap-1">
+                                      {detail.vehicle.temperatureZones.map((zone) => {
+                                        const info = formatTemperatureZone(zone as TemperatureZone)
+                                        return (
+                                          <span key={zone} className={clsx('status-badge text-xs', info.color)}>
+                                            {info.label}
+                                          </span>
+                                        )
+                                      })}
+                                    </div>
+                                    {diffVehicleTempZones && <p className="text-[10px] text-amber-600 mt-1">与其他方案不同</p>}
                                   </div>
                                 </div>
                               ) : (
@@ -1548,19 +1687,37 @@ function DispatchSandbox() {
                               )}
                             </div>
 
-                            <div className="bg-gray-50 rounded-lg p-4">
+                            <div className={clsx(
+                              'bg-gray-50 rounded-lg p-4 transition-all',
+                              (diffDriver || diffDriverStatus) ? 'ring-2 ring-amber-300' : ''
+                            )}>
                               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                 <User size={16} className="text-blue-500" />
                                 司机信息
+                                {(diffDriver || diffDriverStatus) && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                    有差异
+                                  </span>
+                                )}
                               </h4>
                               {detail.driver ? (
                                 <div className="space-y-2">
-                                  <p className="font-medium text-gray-800">{detail.driver.name}</p>
+                                  <p className={clsx(
+                                    'font-medium text-gray-800 p-1.5 rounded',
+                                    getDiffHighlightClass(diffDriver)
+                                  )}>
+                                    {detail.driver.name}
+                                    {diffDriver && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
+                                  </p>
                                   <p className="text-sm text-gray-600">
                                     {detail.driver.phone}
                                   </p>
-                                  <p className="text-sm text-gray-600">
+                                  <p className={clsx(
+                                    'text-sm text-gray-600 p-1.5 rounded',
+                                    getDiffHighlightClass(diffDriverStatus)
+                                  )}>
                                     状态：{detail.driver.status}
+                                    {diffDriverStatus && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
                                   </p>
                                 </div>
                               ) : (
@@ -1568,18 +1725,36 @@ function DispatchSandbox() {
                               )}
                             </div>
 
-                            <div className="bg-gray-50 rounded-lg p-4">
+                            <div className={clsx(
+                              'bg-gray-50 rounded-lg p-4 transition-all',
+                              (diffRoute || diffRouteStops) ? 'ring-2 ring-amber-300' : ''
+                            )}>
                               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                 <MapPin size={16} className="text-blue-500" />
                                 线路信息
+                                {(diffRoute || diffRouteStops) && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                    有差异
+                                  </span>
+                                )}
                               </h4>
                               {detail.route ? (
                                 <div className="space-y-2">
-                                  <p className="font-medium text-gray-800">{detail.route.name}</p>
-                                  <p className="text-sm text-gray-600">
-                                    共 {detail.route.stopCount} 个站点
+                                  <p className={clsx(
+                                    'font-medium text-gray-800 p-1.5 rounded',
+                                    getDiffHighlightClass(diffRoute)
+                                  )}>
+                                    {detail.route.name}
+                                    {diffRoute && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
                                   </p>
-                                  <div className="mt-2 space-y-1 max-h-24 overflow-y-auto">
+                                  <p className={clsx(
+                                    'text-sm text-gray-600 p-1.5 rounded',
+                                    getDiffHighlightClass(diffRouteStops)
+                                  )}>
+                                    共 {detail.route.stopCount} 个站点
+                                    {diffRouteStops && <span className="text-[10px] text-amber-600 ml-2">不同</span>}
+                                  </p>
+                                  <div className="mt-2 space-y-1 max-h-24 overflow-y-auto p-1.5 rounded">
                                     {detail.route.stops.map((stop, idx) => (
                                       <div key={idx} className="flex items-center gap-2 text-xs text-gray-600">
                                         <span className="w-4 h-4 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
@@ -1595,13 +1770,24 @@ function DispatchSandbox() {
                               )}
                             </div>
 
-                            <div className="bg-gray-50 rounded-lg p-4">
+                            <div className={clsx(
+                              'bg-gray-50 rounded-lg p-4 transition-all',
+                              (diffTempZones || diffVehicleTempZones) ? 'ring-2 ring-amber-300' : ''
+                            )}>
                               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                 <Thermometer size={16} className="text-blue-500" />
                                 温区覆盖
+                                {(diffTempZones || diffVehicleTempZones) && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                    有差异
+                                  </span>
+                                )}
                               </h4>
                               <div className="space-y-2">
-                                <div>
+                                <div className={clsx(
+                                  'p-1.5 rounded',
+                                  getDiffHighlightClass(diffTempZones)
+                                )}>
                                   <p className="text-xs text-gray-500 mb-1">订单所需温区</p>
                                   <div className="flex flex-wrap gap-1">
                                     {detail.temperatureZones.map((zone) => {
@@ -1621,8 +1807,12 @@ function DispatchSandbox() {
                                       )
                                     })}
                                   </div>
+                                  {diffTempZones && <p className="text-[10px] text-amber-600 mt-1">与其他方案不同</p>}
                                 </div>
-                                <div>
+                                <div className={clsx(
+                                  'p-1.5 rounded',
+                                  getDiffHighlightClass(diffVehicleTempZones)
+                                )}>
                                   <p className="text-xs text-gray-500 mb-1">车辆温区</p>
                                   <div className="flex flex-wrap gap-1">
                                     {detail.vehicle?.temperatureZones.map((zone) => {
@@ -1638,27 +1828,46 @@ function DispatchSandbox() {
                               </div>
                             </div>
 
-                            <div className="bg-gray-50 rounded-lg p-4">
+                            <div className={clsx(
+                              'bg-gray-50 rounded-lg p-4 transition-all',
+                              (diffDepartureTime || diffArrivalTime || diffDuration) ? 'ring-2 ring-amber-300' : ''
+                            )}>
                               <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                 <Clock size={16} className="text-blue-500" />
                                 时间信息
+                                {(diffDepartureTime || diffArrivalTime || diffDuration) && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                    有差异
+                                  </span>
+                                )}
                               </h4>
                               <div className="space-y-2">
-                                <div className="flex items-center gap-2">
+                                <div className={clsx(
+                                  'flex items-center gap-2 p-1.5 rounded',
+                                  getDiffHighlightClass(diffDepartureTime)
+                                )}>
                                   <span className="text-sm text-gray-500 w-20">发车时间</span>
                                   <ArrowRight size={14} className="text-gray-400" />
                                   <span className="text-sm font-medium text-gray-800">
                                     {formatDateTime(detail.scheduledDepartureTime)}
                                   </span>
+                                  {diffDepartureTime && <span className="text-[10px] text-amber-600 ml-auto">不同</span>}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className={clsx(
+                                  'flex items-center gap-2 p-1.5 rounded',
+                                  getDiffHighlightClass(diffArrivalTime)
+                                )}>
                                   <span className="text-sm text-gray-500 w-20">预计到达</span>
                                   <ArrowRight size={14} className="text-gray-400" />
                                   <span className="text-sm font-medium text-gray-800">
                                     {formatDateTime(detail.estimatedArrivalTime)}
                                   </span>
+                                  {diffArrivalTime && <span className="text-[10px] text-amber-600 ml-auto">不同</span>}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className={clsx(
+                                  'flex items-center gap-2 p-1.5 rounded',
+                                  getDiffHighlightClass(diffDuration)
+                                )}>
                                   <span className="text-sm text-gray-500 w-20">预计耗时</span>
                                   <ArrowRight size={14} className="text-gray-400" />
                                   <span className="text-sm font-medium text-orange-600">
@@ -1669,10 +1878,18 @@ function DispatchSandbox() {
                             </div>
 
                             {detail.conflicts.length > 0 && (
-                              <div className="bg-gray-50 rounded-lg p-4">
+                              <div className={clsx(
+                                'bg-gray-50 rounded-lg p-4 transition-all',
+                                diffConflictCount ? 'ring-2 ring-amber-300' : ''
+                              )}>
                                 <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                   <AlertTriangle size={16} className="text-red-500" />
                                   冲突信息 ({detail.conflicts.length})
+                                  {diffConflictCount && (
+                                    <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                      数量有差异
+                                    </span>
+                                  )}
                                 </h4>
                                 <div className="space-y-2 max-h-48 overflow-y-auto">
                                   {detail.conflicts.map((conflict, index) => (
@@ -1721,14 +1938,39 @@ function DispatchSandbox() {
                                     </div>
                                   ))}
                                 </div>
+                                {diffConflictCount && (
+                                  <div className="mt-2 pt-2 border-t border-amber-200">
+                                    <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                                      <BarChart3 size={10} />
+                                      各方案冲突数量：
+                                      {selectedPlanIdsForCompare.map((pid, idx) => {
+                                        const d = getPlanCompareDetail(pid)
+                                        return (
+                                          <span key={pid} className="ml-1">
+                                            {getComparePlan(pid)?.planName}: {d?.conflicts.length || 0}个
+                                            {idx < selectedPlanIdsForCompare.length - 1 && '，'}
+                                          </span>
+                                        )
+                                      })}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             )}
 
                             {detail.warnings.length > 0 && (
-                              <div className="bg-gray-50 rounded-lg p-4">
+                              <div className={clsx(
+                                'bg-gray-50 rounded-lg p-4 transition-all',
+                                diffWarningCount ? 'ring-2 ring-amber-300' : ''
+                              )}>
                                 <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                   <AlertTriangle size={16} className="text-yellow-500" />
                                   注意事项 ({detail.warnings.length})
+                                  {diffWarningCount && (
+                                    <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                      数量有差异
+                                    </span>
+                                  )}
                                 </h4>
                                 <div className="space-y-2 max-h-32 overflow-y-auto">
                                   {detail.warnings.map((warning, index) => (
@@ -1740,14 +1982,39 @@ function DispatchSandbox() {
                                     </div>
                                   ))}
                                 </div>
+                                {diffWarningCount && (
+                                  <div className="mt-2 pt-2 border-t border-amber-200">
+                                    <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                                      <BarChart3 size={10} />
+                                      各方案警告数量：
+                                      {selectedPlanIdsForCompare.map((pid, idx) => {
+                                        const d = getPlanCompareDetail(pid)
+                                        return (
+                                          <span key={pid} className="ml-1">
+                                            {getComparePlan(pid)?.planName}: {d?.warnings.length || 0}个
+                                            {idx < selectedPlanIdsForCompare.length - 1 && '，'}
+                                          </span>
+                                        )
+                                      })}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             )}
 
                             {detail.suggestions.length > 0 && (
-                              <div className="bg-gray-50 rounded-lg p-4">
+                              <div className={clsx(
+                                'bg-gray-50 rounded-lg p-4 transition-all',
+                                diffSuggestionCount ? 'ring-2 ring-amber-300' : ''
+                              )}>
                                 <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                                   <Lightbulb size={16} className="text-blue-500" />
                                   优化建议 ({detail.suggestions.length})
+                                  {diffSuggestionCount && (
+                                    <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                                      数量有差异
+                                    </span>
+                                  )}
                                 </h4>
                                 <div className="space-y-2 max-h-48 overflow-y-auto">
                                   {detail.suggestions.map((suggestion, index) => (
@@ -1771,6 +2038,23 @@ function DispatchSandbox() {
                                     </div>
                                   ))}
                                 </div>
+                                {diffSuggestionCount && (
+                                  <div className="mt-2 pt-2 border-t border-amber-200">
+                                    <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                                      <BarChart3 size={10} />
+                                      各方案建议数量：
+                                      {selectedPlanIdsForCompare.map((pid, idx) => {
+                                        const d = getPlanCompareDetail(pid)
+                                        return (
+                                          <span key={pid} className="ml-1">
+                                            {getComparePlan(pid)?.planName}: {d?.suggestions.length || 0}个
+                                            {idx < selectedPlanIdsForCompare.length - 1 && '，'}
+                                          </span>
+                                        )
+                                      })}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -1802,19 +2086,53 @@ function DispatchSandbox() {
                 </div>
 
                 <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <BarChart3 size={16} className="text-gray-500" />
-                      <span className="text-sm text-gray-600">
-                        差异说明：高亮显示各方案之间的不同项
-                      </span>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <h5 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                        <BarChart3 size={16} className="text-gray-500" />
+                        差异高亮图例说明
+                      </h5>
+                      <div className="flex flex-wrap gap-4 text-xs text-gray-600">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded border-2 border-amber-400 bg-amber-50" />
+                          <span>字段值有差异</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded ring-2 ring-amber-300 bg-gray-50" />
+                          <span>模块存在差异</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                            有差异
+                          </span>
+                          <span>差异标签</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-amber-600">与其他方案不同</span>
+                          <span>字段差异提示</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                            数量有差异
+                          </span>
+                          <span>数量差异标签</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-3">
+                        提示：琥珀色高亮表示该字段或模块在所选方案之间存在差异。可重点关注这些差异项来选择最优方案。
+                      </p>
                     </div>
-                    <button
-                      onClick={() => setShowCompare(false)}
-                      className="btn-secondary"
-                    >
-                      关闭对比
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right text-xs text-gray-500">
+                        <p>共对比 <span className="font-semibold text-purple-600">{selectedPlanIdsForCompare.length}</span> 个方案</p>
+                      </div>
+                      <button
+                        onClick={() => setShowCompare(false)}
+                        className="btn-secondary"
+                      >
+                        关闭对比
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
