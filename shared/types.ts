@@ -482,6 +482,38 @@ export interface DashboardStats {
   workorderStats?: ExceptionHandlingWorkorderStats;
 }
 
+export type TemperatureRecordFieldKey = 'orderNo' | 'nodeType' | 'recordedAt' | 'temperature' | 'locationText' | 'operatorName';
+
+export const TEMPERATURE_RECORD_FIELDS: Array<{ key: TemperatureRecordFieldKey; label: string; required: boolean }> = [
+  { key: 'orderNo', label: '订单号', required: true },
+  { key: 'nodeType', label: '节点类型', required: true },
+  { key: 'recordedAt', label: '记录时间', required: true },
+  { key: 'temperature', label: '温度', required: true },
+  { key: 'locationText', label: '位置', required: false },
+  { key: 'operatorName', label: '操作人', required: false },
+];
+
+export interface TemperatureRecordColumnMapping {
+  orderNo: number | null;
+  nodeType: number | null;
+  recordedAt: number | null;
+  temperature: number | null;
+  locationText: number | null;
+  operatorName: number | null;
+}
+
+export interface TemperatureRecordColumnParseResult {
+  headers: string[];
+  autoMapping: TemperatureRecordColumnMapping;
+  sampleRows: string[][];
+  separator: string;
+}
+
+export interface TemperatureRecordPreviewWithMappingRequest {
+  csvText: string;
+  mapping: TemperatureRecordColumnMapping;
+}
+
 export type TemperatureRecordStatus = 'importable' | 'abnormal' | 'unmatched';
 
 export interface TemperatureRecordCsvRow {

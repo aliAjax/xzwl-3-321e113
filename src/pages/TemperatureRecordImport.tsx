@@ -13,6 +13,11 @@ import {
   User,
   MapPin,
   Calendar,
+  ArrowRight,
+  ArrowLeft,
+  Check,
+  Settings,
+  Eye,
 } from 'lucide-react'
 import { api } from '@/utils/api'
 import { formatDateTime, formatTemperature, formatTemperatureRange } from '@/utils/format'
@@ -22,7 +27,13 @@ import type {
   TemperatureRecordImportResult,
   TemperatureRecordValidationResult,
   NodeType,
+  TemperatureRecordColumnMapping,
+  TemperatureRecordColumnParseResult,
+  TemperatureRecordFieldKey,
 } from '@shared/types'
+import { TEMPERATURE_RECORD_FIELDS } from '@shared/types'
+
+type ImportStep = 'upload' | 'mapping' | 'preview'
 
 const nodeTypeLabels: Record<NodeType, string> = {
   warehouse_in: '入仓',
@@ -38,6 +49,15 @@ function formatNodeType(nodeType: NodeType | null | undefined): string {
   return nodeTypeLabels[nodeType] || nodeType
 }
 
+const fieldIcons: Record<TemperatureRecordFieldKey, typeof FileText> = {
+  orderNo: FileText,
+  nodeType: Settings,
+  recordedAt: Calendar,
+  temperature: Thermometer,
+  locationText: MapPin,
+  operatorName: User,
+}
+
 function TemperatureRecordImport() {
   const [csvText, setCsvText] = useState('')
   const [previewData, setPreviewData] = useState<TemperatureRecordImportPreview | null>(null)
@@ -48,6 +68,17 @@ function TemperatureRecordImport() {
   const [fileName, setFileName] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [step, setStep] = useState<ImportStep>('upload')
+  const [columnParseResult, setColumnParseResult] = useState<TemperatureRecordColumnParseResult | null>(null)
+  const [columnMapping, setColumnMapping] = useState<TemperatureRecordColumnMapping>({
+    orderNo: null,
+    nodeType: null,
+    recordedAt: null,
+    temperature: null,
+    locationText: null,
+    operatorName: null,
+  })
 
   const handleFileRead = useCallback((file: File) => {
     if (file.size > 10 * 1024 * 1024) {
@@ -62,6 +93,8 @@ function TemperatureRecordImport() {
       setFileName(file.name)
       setPreviewData(null)
       setImportResult(null)
+      setColumnParseResult(null)
+      setStep('upload')
     }
     reader.onerror = () => {
       alert('文件读取失败')
@@ -104,10 +137,12 @@ function TemperatureRecordImport() {
       setPreviewData(null)
       setImportResult(null)
       setFileName('')
+      setColumnParseResult(null)
+      setStep('upload')
     }, 0)
   }
 
-  async function handlePreview() {
+  async function handleParseColumns() {
     if (!csvText.trim()) {
       alert('请先上传文件或粘贴CSV文本')
       return
@@ -115,12 +150,39 @@ function TemperatureRecordImport() {
 
     setLoading(true)
     try {
+      const data = await api.post<TemperatureRecordColumnParseResult>('/temperature-import/parse-columns', {
+        csvText: csvText.trim(),
+      })
+      setColumnParseResult(data)
+      setColumnMapping(data.autoMapping)
+      setStep('mapping')
+    } catch (error) {
+      console.error('Failed to parse columns:', error)
+      alert('解析列失败: ' + (error as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handlePreview() {
+    const requiredFields = TEMPERATURE_RECORD_FIELDS.filter(f => f.required)
+    const missingFields = requiredFields.filter(f => columnMapping[f.key] === null)
+
+    if (missingFields.length > 0) {
+      alert(`请为以下必填字段选择列: ${missingFields.map(f => f.label).join(', ')}`)
+      return
+    }
+
+    setLoading(true)
+    try {
       const data = await api.post<TemperatureRecordImportPreview>('/temperature-import/preview', {
         csvText: csvText.trim(),
+        mapping: columnMapping,
       })
       setPreviewData(data)
       setActiveTab('importable')
       setImportResult(null)
+      setStep('preview')
     } catch (error) {
       console.error('Failed to preview import:', error)
       alert('预览失败: ' + (error as Error).message)
@@ -167,9 +229,53 @@ function TemperatureRecordImport() {
     setImportResult(null)
     setFileName('')
     setActiveTab('importable')
+    setColumnParseResult(null)
+    setColumnMapping({
+      orderNo: null,
+      nodeType: null,
+      recordedAt: null,
+      temperature: null,
+      locationText: null,
+      operatorName: null,
+    })
+    setStep('upload')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
+  }
+
+  function handleBackToUpload() {
+    setStep('upload')
+    setColumnParseResult(null)
+  }
+
+  function handleBackToMapping() {
+    setStep('mapping')
+    setPreviewData(null)
+  }
+
+  function handleMappingChange(fieldKey: TemperatureRecordFieldKey, columnIndex: number | null) {
+    setColumnMapping(prev => ({
+      ...prev,
+      [fieldKey]: columnIndex,
+    }))
+  }
+
+  function getMappedColumnIndex(fieldKey: TemperatureRecordFieldKey): number | null {
+    return columnMapping[fieldKey]
+  }
+
+  function isColumnMapped(columnIndex: number): boolean {
+    return Object.values(columnMapping).includes(columnIndex)
+  }
+
+  function getFieldForColumn(columnIndex: number): TemperatureRecordFieldKey | null {
+    for (const [key, idx] of Object.entries(columnMapping)) {
+      if (idx === columnIndex) {
+        return key as TemperatureRecordFieldKey
+      }
+    }
+    return null
   }
 
   const getCurrentRecords = (): TemperatureRecordValidationResult[] => {
@@ -228,6 +334,9 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
       ]
     : []
 
+  const requiredFields = TEMPERATURE_RECORD_FIELDS.filter(f => f.required)
+  const isMappingComplete = requiredFields.every(f => columnMapping[f.key] !== null)
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -246,7 +355,46 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
         </button>
       </div>
 
-      {!previewData && (
+      <div className="card">
+        <div className="flex items-center justify-between">
+          {(['upload', 'mapping', 'preview'] as ImportStep[]).map((s, idx) => (
+            <div key={s} className="flex items-center">
+              <div className="flex items-center gap-2">
+                <div className={clsx(
+                  'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors',
+                  step === s
+                    ? 'bg-blue-500 text-white'
+                    : idx < ['upload', 'mapping', 'preview'].indexOf(step)
+                      ? 'bg-green-500 text-white'
+                      : 'bg-gray-200 text-gray-500'
+                )}>
+                  {idx < ['upload', 'mapping', 'preview'].indexOf(step) ? (
+                    <Check size={16} />
+                  ) : (
+                    idx + 1
+                  )}
+                </div>
+                <span className={clsx(
+                  'text-sm font-medium',
+                  step === s ? 'text-blue-600' : 'text-gray-500'
+                )}>
+                  {s === 'upload' ? '上传数据' : s === 'mapping' ? '字段映射' : '预览校验'}
+                </span>
+              </div>
+              {idx < 2 && (
+                <div className={clsx(
+                  'w-16 md:w-24 h-0.5 mx-2',
+                  idx < ['upload', 'mapping', 'preview'].indexOf(step)
+                    ? 'bg-green-500'
+                    : 'bg-gray-200'
+                )} />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {step === 'upload' && !previewData && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -300,6 +448,7 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
                 setPreviewData(null)
                 setImportResult(null)
                 setFileName('')
+                setColumnParseResult(null)
               }}
               onPaste={handlePaste}
               placeholder="请粘贴CSV格式的温度记录数据...&#10;订单号,节点类型,记录时间,温度,位置,操作人"
@@ -321,28 +470,140 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
         </div>
       )}
 
-      <div className="flex justify-center gap-3">
-        {previewData ? (
-          <>
+      {step === 'mapping' && columnParseResult && (
+        <div className="space-y-6">
+          <div className="card">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+              <Settings size={20} />
+              字段映射确认
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">
+              系统已自动识别列与字段的映射关系，请确认或手动调整。<span className="text-red-500">*</span> 标记为必填字段。
+            </p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-500 w-32">目标字段</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">映射列</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-500">示例数据</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {TEMPERATURE_RECORD_FIELDS.map((field) => {
+                    const Icon = fieldIcons[field.key]
+                    const mappedIndex = getMappedColumnIndex(field.key)
+                    const mappedColumn = mappedIndex !== null ? columnParseResult.headers[mappedIndex] : null
+
+                    return (
+                      <tr key={field.key} className="border-b last:border-b-0 hover:bg-gray-50">
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-2">
+                            <Icon size={16} className="text-gray-400" />
+                            <span className="text-sm font-medium text-gray-800">
+                              {field.label}
+                              {field.required && <span className="text-red-500 ml-1">*</span>}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <select
+                            value={mappedIndex ?? ''}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              handleMappingChange(field.key, value === '' ? null : parseInt(value))
+                            }}
+                            className={clsx(
+                              'w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500',
+                              mappedIndex === null && field.required
+                                ? 'border-red-300 bg-red-50'
+                                : 'border-gray-300'
+                            )}
+                          >
+                            <option value="">-- 不映射 --</option>
+                            {columnParseResult.headers.map((header, idx) => (
+                              <option
+                                key={idx}
+                                value={idx}
+                                disabled={isColumnMapped(idx) && getFieldForColumn(idx) !== field.key}
+                                className={clsx(
+                                  isColumnMapped(idx) && getFieldForColumn(idx) !== field.key
+                                    ? 'text-gray-400'
+                                    : ''
+                                )}
+                              >
+                                {header}
+                                {isColumnMapped(idx) && getFieldForColumn(idx) !== field.key && (
+                                  ` (已映射: ${TEMPERATURE_RECORD_FIELDS.find(f => f.key === getFieldForColumn(idx))?.label})`
+                                )}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3 px-4">
+                          {mappedIndex !== null && columnParseResult.sampleRows.length > 0 ? (
+                            <div className="space-y-1">
+                              {columnParseResult.sampleRows.slice(0, 3).map((row, rowIdx) => (
+                                <p key={rowIdx} className="text-sm text-gray-600 truncate">
+                                  {row[mappedIndex] || '-'}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-sm text-gray-400">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+              <p className="text-sm text-blue-700">
+                <strong>检测到的列:</strong> {columnParseResult.headers.join(' | ')}
+              </p>
+              <p className="text-sm text-blue-600 mt-1">
+                <strong>分隔符:</strong> {columnParseResult.separator === '\t' ? '制表符 (Tab)' : '逗号 (,)'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-center gap-3">
             <button
-              onClick={handleReset}
+              onClick={handleBackToUpload}
               className="btn btn-secondary flex items-center gap-2"
             >
-              <RefreshCw size={16} />
-              重新上传
+              <ArrowLeft size={16} />
+              返回上传
             </button>
             <button
-              onClick={handleImport}
-              disabled={importing || allRecords.length === 0}
+              onClick={handlePreview}
+              disabled={loading || !isMappingComplete}
               className="btn btn-primary flex items-center gap-2"
             >
-              <Send size={16} />
-              {importing ? '导入中...' : '确认导入'}
+              {loading ? (
+                <>
+                  <RefreshCw size={16} className="animate-spin" />
+                  解析中...
+                </>
+              ) : (
+                <>
+                  <Eye size={16} />
+                  预览校验
+                </>
+              )}
             </button>
-          </>
-        ) : (
+          </div>
+        </div>
+      )}
+
+      {step === 'upload' && (
+        <div className="flex justify-center gap-3">
           <button
-            onClick={handlePreview}
+            onClick={handleParseColumns}
             disabled={loading || !csvText.trim()}
             className="btn btn-primary flex items-center gap-2"
           >
@@ -353,15 +614,15 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
               </>
             ) : (
               <>
-                <Upload size={16} />
-                预览数据
+                <ArrowRight size={16} />
+                下一步
               </>
             )}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      {loading && (
+      {loading && step === 'preview' && (
         <div className="flex items-center justify-center h-32">
           <div className="text-center">
             <RefreshCw size={32} className="mx-auto mb-2 text-blue-500 animate-spin" />
@@ -379,8 +640,33 @@ ORD002,loading,2024-01-01 11:00:00,-18.0,二号仓库,李四`
         </div>
       )}
 
-      {previewData && !loading && !importing && (
+      {previewData && !loading && !importing && step === 'preview' && (
         <>
+          <div className="flex justify-center gap-3 mb-6">
+            <button
+              onClick={handleBackToMapping}
+              className="btn btn-secondary flex items-center gap-2"
+            >
+              <ArrowLeft size={16} />
+              返回映射
+            </button>
+            <button
+              onClick={handleReset}
+              className="btn btn-secondary flex items-center gap-2"
+            >
+              <RefreshCw size={16} />
+              重新上传
+            </button>
+            <button
+              onClick={handleImport}
+              disabled={importing || allRecords.length === 0}
+              className="btn btn-primary flex items-center gap-2"
+            >
+              <Send size={16} />
+              {importing ? '导入中...' : '确认导入'}
+            </button>
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="card">
               <div className="flex items-center justify-between">

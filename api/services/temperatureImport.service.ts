@@ -15,6 +15,8 @@ import type {
   DeliveryNode,
   Order,
   DeliveryTask,
+  TemperatureRecordColumnMapping,
+  TemperatureRecordColumnParseResult,
 } from '../../shared/types';
 
 function generateId(): string {
@@ -45,28 +47,114 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-function parseCsvText(csvText: string): TemperatureRecordCsvRow[] {
+const columnHeaderMatchers: Record<string, string[]> = {
+  orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
+  nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
+  recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
+  temperature: ['温度', '温度值', 'temperature', 'temp', '测温值'],
+  locationText: ['位置', 'locationtext', 'location', '地点', '地址', '存放位置'],
+  operatorName: ['操作人', 'operatorname', 'operator', '操作员', '经办人', '负责人'],
+};
+
+function detectSeparator(line: string): string {
+  if (line.includes('\t')) return '\t';
+  return ',';
+}
+
+function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
+  const mapping: TemperatureRecordColumnMapping = {
+    orderNo: null,
+    nodeType: null,
+    recordedAt: null,
+    temperature: null,
+    locationText: null,
+    operatorName: null,
+  };
+
+  const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
+
+  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+    for (let i = 0; i < normalizedHeaders.length; i++) {
+      const header = normalizedHeaders[i];
+      if (patterns.some(pattern => header.includes(pattern))) {
+        (mapping as any)[field] = i;
+        break;
+      }
+    }
+  }
+
+  return mapping;
+}
+
+function parseColumns(csvText: string): TemperatureRecordColumnParseResult {
+  const lines = csvText.trim().split(/\r?\n/);
+  if (lines.length === 0) {
+    throw new Error('CSV内容为空');
+  }
+
+  const separator = detectSeparator(lines[0]);
+  const headers = lines[0].split(separator).map(h => h.trim());
+
+  if (headers.length === 0 || headers.every(h => h === '')) {
+    throw new Error('无法识别CSV表头');
+  }
+
+  const autoMapping = autoDetectMapping(headers);
+
+  const sampleRows: string[][] = [];
+  for (let i = 1; i < Math.min(lines.length, 6); i++) {
+    const line = lines[i].trim();
+    if (line) {
+      sampleRows.push(line.split(separator).map(v => v.trim()));
+    }
+  }
+
+  return {
+    headers,
+    autoMapping,
+    sampleRows,
+    separator,
+  };
+}
+
+function parseCsvText(csvText: string, mapping?: TemperatureRecordColumnMapping): TemperatureRecordCsvRow[] {
   const lines = csvText.trim().split(/\r?\n/);
   if (lines.length === 0) return [];
 
-  const separator = lines[0].includes('\t') ? '\t' : ',';
+  const separator = detectSeparator(lines[0]);
   const headerLine = lines[0];
   const headers = headerLine.split(separator).map(h => h.trim().toLowerCase());
 
-  const columnMap: Record<string, number> = {};
-  headers.forEach((header, index) => {
-    if (header === '订单号' || header === 'orderno') columnMap.orderNo = index;
-    if (header === '节点类型' || header === 'nodetype') columnMap.nodeType = index;
-    if (header === '记录时间' || header === 'recordedat') columnMap.recordedAt = index;
-    if (header === '温度' || header === '温度值' || header === 'temperature') columnMap.temperature = index;
-    if (header === '位置' || header === 'locationtext') columnMap.locationText = index;
-    if (header === '操作人' || header === 'operatorname') columnMap.operatorName = index;
-  });
+  let columnMap: Record<string, number> = {};
+
+  if (mapping) {
+    if (mapping.orderNo !== null) columnMap.orderNo = mapping.orderNo;
+    if (mapping.nodeType !== null) columnMap.nodeType = mapping.nodeType;
+    if (mapping.recordedAt !== null) columnMap.recordedAt = mapping.recordedAt;
+    if (mapping.temperature !== null) columnMap.temperature = mapping.temperature;
+    if (mapping.locationText !== null) columnMap.locationText = mapping.locationText;
+    if (mapping.operatorName !== null) columnMap.operatorName = mapping.operatorName;
+  } else {
+    headers.forEach((header, index) => {
+      if (header === '订单号' || header === 'orderno') columnMap.orderNo = index;
+      if (header === '节点类型' || header === 'nodetype') columnMap.nodeType = index;
+      if (header === '记录时间' || header === 'recordedat') columnMap.recordedAt = index;
+      if (header === '温度' || header === '温度值' || header === 'temperature') columnMap.temperature = index;
+      if (header === '位置' || header === 'locationtext') columnMap.locationText = index;
+      if (header === '操作人' || header === 'operatorname') columnMap.operatorName = index;
+    });
+  }
 
   const requiredColumns = ['orderNo', 'nodeType', 'recordedAt', 'temperature'];
   const missingColumns = requiredColumns.filter(col => !(col in columnMap));
   if (missingColumns.length > 0) {
-    throw new Error(`CSV缺少必要列: ${missingColumns.join(', ')}`);
+    const columnLabels: Record<string, string> = {
+      orderNo: '订单号',
+      nodeType: '节点类型',
+      recordedAt: '记录时间',
+      temperature: '温度',
+    };
+    throw new Error(`缺少必要列: ${missingColumns.map(c => columnLabels[c] || c).join(', ')}`);
   }
 
   const rows: TemperatureRecordCsvRow[] = [];
@@ -274,8 +362,8 @@ function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValid
   };
 }
 
-function previewImport(csvText: string): TemperatureRecordImportPreview {
-  const rows = parseCsvText(csvText);
+function previewImport(csvText: string, mapping?: TemperatureRecordColumnMapping): TemperatureRecordImportPreview {
+  const rows = parseCsvText(csvText, mapping);
   const validationResults: TemperatureRecordValidationResult[] = [];
 
   rows.forEach((row, index) => {
@@ -404,6 +492,9 @@ function executeImport(
 }
 
 export const temperatureImportService = {
+  parseColumns,
+  detectSeparator,
+  autoDetectMapping,
   parseCsvText,
   parseRow,
   matchRecord,

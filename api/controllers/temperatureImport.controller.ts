@@ -4,10 +4,11 @@ import type {
   TemperatureRecordImportRequest,
   TemperatureRecordValidationResult,
   User,
+  TemperatureRecordColumnMapping,
 } from '../../shared/types';
 
 export const temperatureImportController = {
-  async previewImport(req: Request, res: Response): Promise<Response> {
+  async parseColumns(req: Request, res: Response): Promise<Response> {
     try {
       const { csvText } = req.body;
 
@@ -15,7 +16,22 @@ export const temperatureImportController = {
         return res.status(400).json({ message: 'CSV文本不能为空' });
       }
 
-      const result = temperatureImportService.previewImport(csvText);
+      const result = temperatureImportService.parseColumns(csvText);
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(500).json({ message: '解析列失败', error: (error as Error).message });
+    }
+  },
+
+  async previewImport(req: Request, res: Response): Promise<Response> {
+    try {
+      const { csvText, mapping } = req.body as { csvText: string; mapping?: TemperatureRecordColumnMapping };
+
+      if (!csvText) {
+        return res.status(400).json({ message: 'CSV文本不能为空' });
+      }
+
+      const result = temperatureImportService.previewImport(csvText, mapping);
       return res.status(200).json(result);
     } catch (error) {
       return res.status(500).json({ message: '预览导入失败', error: (error as Error).message });
