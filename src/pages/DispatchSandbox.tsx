@@ -19,10 +19,12 @@ import {
   Lightbulb,
   Layers,
   Zap,
+  Filter,
 } from 'lucide-react'
 import { api } from '@/utils/api'
 import {
   formatDateTime,
+  formatDateOnly,
   formatOrderStatus,
   formatTemperatureZone,
   formatDurationMinutes,
@@ -37,12 +39,15 @@ import type {
   DispatchPreviewSuggestion,
   TemperatureZone,
   RouteStop,
+  Customer,
+  OrderStatus,
 } from '@shared/types'
 import clsx from 'clsx'
 
 function DispatchSandbox() {
   const navigate = useNavigate()
   const [orders, setOrders] = useState<Order[]>([])
+  const [customers, setCustomers] = useState<Customer[]>([])
   const [selectedOrders, setSelectedOrders] = useState<string[]>([])
   const [scheduledTime, setScheduledTime] = useState('')
   const [maxPlans, setMaxPlans] = useState(10)
@@ -55,15 +60,31 @@ function DispatchSandbox() {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [filteredOrders, setFilteredOrders] = useState<DispatchSandboxFilteredOrder[]>([])
   const [showFilteredOrders, setShowFilteredOrders] = useState(false)
+  const [filterCustomerId, setFilterCustomerId] = useState<string>('')
+  const [filterTemperatureZone, setFilterTemperatureZone] = useState<TemperatureZone | ''>('')
+  const [filterStatus, setFilterStatus] = useState<OrderStatus | ''>('')
+  const [filterDeliveryDate, setFilterDeliveryDate] = useState<string>('')
 
   useEffect(() => {
     loadData()
   }, [])
 
+  useEffect(() => {
+    if (hasActiveFilters) {
+      setSandboxResult(null)
+      setPlanDetail(null)
+      setShowDetail(false)
+    }
+  }, [filterCustomerId, filterTemperatureZone, filterStatus, filterDeliveryDate])
+
   async function loadData() {
     try {
-      const response = await api.get<{ total: number; orders: Order[] }>('/dispatch/orders/dispatchable')
-      setOrders(response.orders)
+      const [ordersResponse, customersResponse] = await Promise.all([
+        api.get<{ total: number; orders: Order[] }>('/dispatch/orders/dispatchable'),
+        api.get<Customer[]>('/customers'),
+      ])
+      setOrders(ordersResponse.orders)
+      setCustomers(customersResponse)
     } catch (error) {
       console.error('Failed to load sandbox data:', error)
     } finally {
@@ -148,6 +169,46 @@ function DispatchSandbox() {
     navigate(`/dispatch?${params.toString()}`)
   }
 
+  const filteredOrdersList = orders.filter((order) => {
+    if (filterCustomerId && order.customerId !== filterCustomerId) {
+      return false
+    }
+    if (filterTemperatureZone && order.temperatureZone !== filterTemperatureZone) {
+      return false
+    }
+    if (filterStatus && order.status !== filterStatus) {
+      return false
+    }
+    if (filterDeliveryDate) {
+      const orderDate = formatDateOnly(order.scheduledDeliveryTime)
+      if (orderDate !== filterDeliveryDate) {
+        return false
+      }
+    }
+    return true
+  })
+
+  const hasActiveFilters = filterCustomerId || filterTemperatureZone || filterStatus || filterDeliveryDate
+
+  const selectedOrdersInFilter = filteredOrdersList.filter((o) => selectedOrders.includes(o.id))
+
+  const selectedOrdersData = orders.filter((o) => selectedOrders.includes(o.id))
+
+  const selectedOrdersSummary = {
+    totalOrders: selectedOrdersData.length,
+    dispatchableOrders: selectedOrdersData.filter((o) => ['created', 'warehoused'].includes(o.status)).length,
+    totalWeight: selectedOrdersData.reduce((sum, o) => sum + o.weight, 0),
+    totalQuantity: selectedOrdersData.reduce((sum, o) => sum + o.quantity, 0),
+    requiredTemperatureZones: Array.from(new Set(selectedOrdersData.map((o) => o.temperatureZone))),
+  }
+
+  function clearFilters() {
+    setFilterCustomerId('')
+    setFilterTemperatureZone('')
+    setFilterStatus('')
+    setFilterDeliveryDate('')
+  }
+
   function toggleOrderSelection(orderId: string) {
     setSelectedOrders((prev) =>
       prev.includes(orderId)
@@ -160,10 +221,12 @@ function DispatchSandbox() {
   }
 
   function toggleSelectAll() {
-    if (selectedOrders.length === orders.length) {
-      setSelectedOrders([])
+    const allFilteredSelected = selectedOrdersInFilter.length === filteredOrdersList.length
+    if (allFilteredSelected) {
+      setSelectedOrders((prev) => prev.filter((id) => !filteredOrdersList.some((o) => o.id === id)))
     } else {
-      setSelectedOrders(orders.map((o) => o.id))
+      const filteredOrderIds = filteredOrdersList.map((o) => o.id)
+      setSelectedOrders((prev) => Array.from(new Set([...prev, ...filteredOrderIds])))
     }
     setSandboxResult(null)
   }
@@ -272,12 +335,94 @@ function DispatchSandbox() {
                   onClick={toggleSelectAll}
                   className="text-sm text-blue-600 hover:text-blue-700"
                 >
-                  {selectedOrders.length === orders.length ? '取消全选' : '全选'}
+                  {selectedOrdersInFilter.length === filteredOrdersList.length && filteredOrdersList.length > 0
+                    ? '取消全选'
+                    : '全选'}
                 </button>
                 <span className="text-sm text-gray-500">
-                  已选择 {selectedOrders.length} / {orders.length}
+                  已选择 {selectedOrdersInFilter.length} / {filteredOrdersList.length}
+                  {hasActiveFilters && (
+                    <span className="ml-1 text-blue-600">(筛选中)</span>
+                  )}
                 </span>
               </div>
+            </div>
+
+            <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2 mb-3">
+                <Filter size={14} className="text-gray-500" />
+                <span className="text-xs font-medium text-gray-600">筛选条件</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">客户</label>
+                  <select
+                    value={filterCustomerId}
+                    onChange={(e) => setFilterCustomerId(e.target.value)}
+                    className="input-field text-sm py-1.5"
+                  >
+                    <option value="">全部客户</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">温区</label>
+                  <select
+                    value={filterTemperatureZone}
+                    onChange={(e) => setFilterTemperatureZone(e.target.value as TemperatureZone | '')}
+                    className="input-field text-sm py-1.5"
+                  >
+                    <option value="">全部温区</option>
+                    <option value="frozen">冷冻</option>
+                    <option value="chilled">冷藏</option>
+                    <option value="ambient">常温</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">订单状态</label>
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value as OrderStatus | '')}
+                    className="input-field text-sm py-1.5"
+                  >
+                    <option value="">全部状态</option>
+                    <option value="created">已创建</option>
+                    <option value="warehoused">已入仓</option>
+                    <option value="loading">装车中</option>
+                    <option value="in_transit">运输中</option>
+                    <option value="delivered">已送达</option>
+                    <option value="completed">已完成</option>
+                    <option value="cancelled">已取消</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">计划送达日期</label>
+                  <input
+                    type="date"
+                    value={filterDeliveryDate}
+                    onChange={(e) => setFilterDeliveryDate(e.target.value)}
+                    className="input-field text-sm py-1.5"
+                  />
+                </div>
+              </div>
+              {hasActiveFilters && (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">
+                    筛选结果：{filteredOrdersList.length} 个订单
+                  </span>
+                  <button
+                    onClick={clearFilters}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                  >
+                    <XCircle size={12} />
+                    清空筛选
+                  </button>
+                </div>
+              )}
             </div>
 
             {showFilteredOrders && filteredOrders.length > 0 && (
@@ -311,8 +456,8 @@ function DispatchSandbox() {
             )}
 
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
-              {orders.length > 0 ? (
-                orders.map((order) => {
+              {filteredOrdersList.length > 0 ? (
+                filteredOrdersList.map((order) => {
                   const isSelected = selectedOrders.includes(order.id)
                   const statusInfo = formatOrderStatus(order.status)
                   const tempZoneInfo = formatTemperatureZone(order.temperatureZone)
@@ -372,7 +517,9 @@ function DispatchSandbox() {
                   )
                 })
               ) : (
-                <div className="text-center py-12 text-gray-500">暂无待调度订单</div>
+                <div className="text-center py-12 text-gray-500">
+                  {hasActiveFilters ? '没有符合筛选条件的订单' : '暂无待调度订单'}
+                </div>
               )}
             </div>
           </div>
@@ -624,7 +771,7 @@ function DispatchSandbox() {
             </div>
           </div>
 
-          {sandboxResult && (
+          {(sandboxResult || selectedOrdersData.length > 0) && (
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
                 <Layers size={16} />
@@ -633,16 +780,20 @@ function DispatchSandbox() {
               <div className="space-y-3">
                 <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
                   <span className="text-sm text-gray-600">选中订单</span>
-                  <span className="font-semibold text-gray-800">{sandboxResult.totalOrders} 单</span>
+                  <span className="font-semibold text-gray-800">
+                    {sandboxResult ? sandboxResult.totalOrders : selectedOrdersSummary.totalOrders} 单
+                  </span>
                 </div>
                 <div className="flex justify-between items-center p-2 bg-green-50 rounded">
                   <span className="text-sm text-green-700 flex items-center gap-1">
                     <CheckCircle size={14} />
                     可调度订单
                   </span>
-                  <span className="font-semibold text-green-700">{sandboxResult.dispatchableOrders} 单</span>
+                  <span className="font-semibold text-green-700">
+                    {sandboxResult ? sandboxResult.dispatchableOrders : selectedOrdersSummary.dispatchableOrders} 单
+                  </span>
                 </div>
-                {sandboxResult.filteredOrders.length > 0 && (
+                {sandboxResult && sandboxResult.filteredOrders.length > 0 && (
                   <div className="flex justify-between items-center p-2 bg-yellow-50 rounded">
                     <span className="text-sm text-yellow-700 flex items-center gap-1">
                       <AlertTriangle size={14} />
@@ -653,16 +804,20 @@ function DispatchSandbox() {
                 )}
                 <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
                   <span className="text-sm text-gray-600">总重量</span>
-                  <span className="font-semibold text-gray-800">{sandboxResult.totalWeight} kg</span>
+                  <span className="font-semibold text-gray-800">
+                    {sandboxResult ? sandboxResult.totalWeight : selectedOrdersSummary.totalWeight} kg
+                  </span>
                 </div>
                 <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
                   <span className="text-sm text-gray-600">总件数</span>
-                  <span className="font-semibold text-gray-800">{sandboxResult.totalQuantity} 件</span>
+                  <span className="font-semibold text-gray-800">
+                    {sandboxResult ? sandboxResult.totalQuantity : selectedOrdersSummary.totalQuantity} 件
+                  </span>
                 </div>
                 <div>
                   <span className="text-sm text-gray-600 mb-2 block">涉及温区</span>
                   <div className="flex flex-wrap gap-1">
-                    {sandboxResult.requiredTemperatureZones.map((zone) => {
+                    {(sandboxResult ? sandboxResult.requiredTemperatureZones : selectedOrdersSummary.requiredTemperatureZones).map((zone) => {
                       const info = formatTemperatureZone(zone)
                       return (
                         <span key={zone} className={clsx('status-badge text-xs', info.color)}>
