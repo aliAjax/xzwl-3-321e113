@@ -10,7 +10,6 @@ import type {
   OrderStatus,
   NodeUpdateRequest,
   NodeUpdateResponse,
-  ConflictType,
   User,
 } from '../../shared/types';
 
@@ -118,6 +117,8 @@ export const deliveryService = {
       operatorId: operator.id,
       operatorName: operator.name,
       createdAt: now,
+      version: 1,
+      updatedAt: now,
     });
 
     return node;
@@ -147,6 +148,8 @@ export const deliveryService = {
           operatorId: operator.id,
           operatorName: operator.name,
           createdAt: now,
+          version: 1,
+          updatedAt: now,
         });
         nodes.push(node);
       } else {
@@ -207,7 +210,21 @@ export const deliveryService = {
       temperature: request.temperature,
       exceptionDescription: request.exceptionDescription,
       clientSubmitId: request.clientSubmitId,
+      version: request.version,
     });
+
+    if (request.version !== undefined && !updatedNode) {
+      const currentNode = nodeRepository.findById(nodeId);
+      return {
+        success: false,
+        conflict: {
+          type: 'concurrent_update',
+          message: '检测到并发更新，请刷新后重试',
+          currentNode: currentNode || node,
+          submittedData: request,
+        },
+      };
+    }
 
     if (updatedNode) {
       this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
@@ -279,7 +296,7 @@ export const deliveryService = {
       throw new Error('到达节点已完成');
     }
 
-    return this.updateNodeStatus(
+    const result = this.updateNodeStatus(
       arrivalNode.id,
       {
         status: 'completed',
@@ -288,6 +305,10 @@ export const deliveryService = {
       },
       operator
     );
+    if (result.conflict) {
+      throw new Error(result.conflict.message);
+    }
+    return result.node;
   },
 
   recordDelivery(
@@ -306,7 +327,7 @@ export const deliveryService = {
       throw new Error('配送节点已完成');
     }
 
-    return this.updateNodeStatus(
+    const result = this.updateNodeStatus(
       deliveryNode.id,
       {
         status: exceptionDescription ? 'exception' : 'completed',
@@ -316,6 +337,10 @@ export const deliveryService = {
       },
       operator
     );
+    if (result.conflict) {
+      throw new Error(result.conflict.message);
+    }
+    return result.node;
   },
 
   recordSignature(
@@ -340,7 +365,7 @@ export const deliveryService = {
 
     const exceptionDescription = signatoryName ? undefined : '未签收';
 
-    return this.updateNodeStatus(
+    const result = this.updateNodeStatus(
       signatureNode.id,
       {
         status: exceptionDescription ? 'exception' : 'completed',
@@ -349,6 +374,10 @@ export const deliveryService = {
       },
       operator
     );
+    if (result.conflict) {
+      throw new Error(result.conflict.message);
+    }
+    return result.node;
   },
 
   recordException(
@@ -368,7 +397,7 @@ export const deliveryService = {
       throw new Error('节点已完成');
     }
 
-    return this.updateNodeStatus(
+    const result = this.updateNodeStatus(
       node.id,
       {
         status: 'exception',
@@ -378,6 +407,10 @@ export const deliveryService = {
       },
       operator
     );
+    if (result.conflict) {
+      throw new Error(result.conflict.message);
+    }
+    return result.node;
   },
 
   getTaskProgress(taskId: string): {

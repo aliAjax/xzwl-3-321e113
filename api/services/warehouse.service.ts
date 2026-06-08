@@ -161,6 +161,8 @@ export const warehouseService = {
       exceptionDescription: request.remarks,
       operatorId: operator.id,
       operatorName: operator.name,
+      version: 1,
+      updatedAt: now,
       createdAt: now,
     });
 

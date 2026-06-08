@@ -16,6 +16,7 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
     operatorId: 'operator_id',
     operatorName: 'operator_name',
     clientSubmitId: 'client_submit_id',
+    version: 'version',
     createdAt: 'created_at',
     updatedAt: 'updated_at',
   };
@@ -129,11 +130,45 @@ class NodeRepository extends BaseRepository<DeliveryNode> {
       exceptionDescription?: string;
       recordedAt?: string;
       clientSubmitId?: string;
+      version?: number;
     }
   ): DeliveryNode | undefined {
     const now = data.recordedAt || new Date().toISOString();
     const status: NodeStatus = data.exceptionDescription ? 'exception' : 'completed';
     const updatedAt = new Date().toISOString();
+
+    if (data.version !== undefined) {
+      const result = this.db
+        .prepare(
+          `UPDATE delivery_nodes SET
+            status = ?,
+            recorded_at = ?,
+            location_text = ?,
+            temperature = ?,
+            exception_description = ?,
+            client_submit_id = ?,
+            version = version + 1,
+            updated_at = ?
+          WHERE id = ? AND version = ?`
+        )
+        .run(
+          status,
+          now,
+          data.locationText,
+          data.temperature ?? null,
+          data.exceptionDescription ?? null,
+          data.clientSubmitId ?? null,
+          updatedAt,
+          id,
+          data.version
+        );
+
+      if (result.changes === 0) {
+        return undefined;
+      }
+
+      return this.findById(id);
+    }
 
     return this.update(id, {
       status,

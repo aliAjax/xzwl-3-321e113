@@ -40,6 +40,9 @@ function OrderDetail() {
         taskId: '',
         operatorId: event.operatorId || '',
         operatorName: event.operatorName || '',
+        version: 1,
+        updatedAt: event.recordedAt || new Date().toISOString(),
+        createdAt: event.recordedAt || new Date().toISOString(),
       }))
       setOrder(orderData)
       setTimelineNodes(nodes)

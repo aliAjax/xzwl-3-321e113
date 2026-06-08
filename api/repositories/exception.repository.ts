@@ -400,6 +400,8 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
           operatorId: '',
           operatorName: row.node_operator_name as string,
           createdAt: '',
+          version: 1,
+          updatedAt: row.node_recorded_at as string || new Date().toISOString(),
         };
       }
 
@@ -508,6 +510,8 @@ class ExceptionHandlingRepository extends BaseRepository<ExceptionHandling> {
         operatorId: row.node_operator_id as string,
         operatorName: row.node_operator_name as string,
         createdAt: '',
+        version: 1,
+        updatedAt: row.node_recorded_at as string || new Date().toISOString(),
       };
     }
 

@@ -23,7 +23,7 @@ import {
   User,
   Wifi,
   WifiOff,
-  Sync,
+  Loader2,
   AlertTriangle,
   RotateCcw,
 } from 'lucide-react'
@@ -246,26 +246,31 @@ function DriverMobile() {
     setSubmitting(true)
 
     try {
+      const task = tasks.find((t) => t.id === updateForm.taskId)
+      const node = task?.nodes?.find((n) => n.id === updateForm.nodeId)
+
+      if (!task || !node) {
+        alert('找不到对应的节点信息')
+        return
+      }
+
       const request: NodeUpdateRequest = {
         status: updateForm.status,
         locationText: updateForm.locationText,
         exceptionDescription: updateForm.status === 'exception' ? updateForm.exceptionDescription : undefined,
         temperature: updateForm.temperature ? parseFloat(updateForm.temperature) : undefined,
         clientSubmitId: offlineSync.generateClientSubmitId(),
+        version: node.version,
         updatedAt: new Date().toISOString(),
       }
 
-      const task = tasks.find((t) => t.id === updateForm.taskId)
-      const node = task?.nodes?.find((n) => n.id === updateForm.nodeId)
-
-      if (task && node) {
-        offlineSync.addToQueue(
-          updateForm.nodeId,
-          updateForm.taskId,
-          node.nodeType,
-          request
-        )
-      }
+      offlineSync.addToQueue(
+        updateForm.nodeId,
+        updateForm.taskId,
+        node.nodeType,
+        node.version,
+        request
+      )
 
       setShowUpdateModal(false)
       setUpdateForm(null)
@@ -286,10 +291,10 @@ function DriverMobile() {
     return offlineSync.getNodeSyncStatus(nodeId)
   }
 
-  const getSyncStatusLabel = (status: SyncStatus): { label: string; color: string; icon: typeof Sync } => {
-    const statusMap: Record<SyncStatus, { label: string; color: string; icon: typeof Sync }> = {
+  const getSyncStatusLabel = (status: SyncStatus): { label: string; color: string; icon: typeof Loader2 } => {
+    const statusMap: Record<SyncStatus, { label: string; color: string; icon: typeof Loader2 }> = {
       pending: { label: '待同步', color: 'text-yellow-600 bg-yellow-50', icon: Clock },
-      syncing: { label: '同步中', color: 'text-blue-600 bg-blue-50', icon: Sync },
+      syncing: { label: '同步中', color: 'text-blue-600 bg-blue-50', icon: Loader2 },
       failed: { label: '同步失败', color: 'text-red-600 bg-red-50', icon: AlertTriangle },
       conflict: { label: '有冲突', color: 'text-orange-600 bg-orange-50', icon: AlertCircle },
       synced: { label: '已同步', color: 'text-green-600 bg-green-50', icon: Check },
@@ -607,7 +612,7 @@ function DriverMobile() {
                           ) : isException ? (
                             <AlertCircle size={14} className="text-white" />
                           ) : syncStatus === 'syncing' ? (
-                            <Sync size={14} className="text-white animate-spin" />
+                            <Loader2 size={14} className="text-white animate-spin" />
                           ) : (
                             <span className="text-white text-xs font-medium">
                               {index + 1}
@@ -736,7 +741,7 @@ function DriverMobile() {
         )}
         {isOnline && pendingCount > 0 && (
           <div className="bg-blue-500 text-white text-center py-1.5 text-xs font-medium flex items-center justify-center gap-1">
-            <Sync size={12} className="animate-spin" />
+            <Loader2 size={12} className="animate-spin" />
             正在同步 {pendingCount} 个待提交项目...
           </div>
         )}
@@ -1045,7 +1050,7 @@ function DriverMobile() {
                 >
                   {submitting ? (
                     <>
-                      <Sync size={16} className="animate-spin" />
+                      <Loader2 size={16} className="animate-spin" />
                       提交中...
                     </>
                   ) : (

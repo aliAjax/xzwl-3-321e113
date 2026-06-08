@@ -84,6 +84,8 @@ export const loadingService = {
         operatorId: operator.id,
         operatorName: operator.name,
         createdAt: now,
+        version: 1,
+        updatedAt: now,
       });
 
       taskRepository.updateStatus(task.id, 'loading');
@@ -125,6 +127,8 @@ export const loadingService = {
         operatorId: operator.id,
         operatorName: operator.name,
         createdAt: now,
+        version: 1,
+        updatedAt: now,
       });
 
       taskRepository.updateStatus(task.id, 'in_transit');
@@ -166,6 +170,8 @@ export const loadingService = {
         operatorId: operator.id,
         operatorName: operator.name,
         createdAt: now,
+        version: 1,
+        updatedAt: now,
       });
     }
 

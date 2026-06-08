@@ -367,6 +367,8 @@ export const dispatchService = {
             operatorId: '',
             operatorName: '系统',
             createdAt: now,
+            version: 1,
+            updatedAt: now,
           });
         }
       } else {
@@ -393,6 +395,8 @@ export const dispatchService = {
           operatorId: '',
           operatorName: '系统',
           createdAt: now,
+          version: 1,
+          updatedAt: now,
         });
       }
 

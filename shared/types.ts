@@ -144,6 +144,7 @@ export interface DeliveryNode {
   operatorId: string;
   operatorName: string;
   clientSubmitId?: string;
+  version: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -278,6 +279,7 @@ export interface NodeUpdateRequest {
   temperature?: number;
   clientSubmitId?: string;
   updatedAt?: string;
+  version?: number;
 }
 
 export interface OfflineSyncQueueItem {
@@ -286,6 +288,7 @@ export interface OfflineSyncQueueItem {
   nodeId: string;
   taskId: string;
   nodeType: NodeType;
+  currentVersion: number;
   request: NodeUpdateRequest;
   status: SyncStatus;
   createdAt: string;

@@ -100,6 +100,7 @@ class OfflineSyncManager {
     nodeId: string,
     taskId: string,
     nodeType: NodeType,
+    currentVersion: number,
     request: NodeUpdateRequest
   ): OfflineSyncQueueItem {
     const clientSubmitId = request.clientSubmitId || this.generateClientSubmitId();
@@ -113,9 +114,11 @@ class OfflineSyncManager {
       const existing = this.queue[existingIndex];
       const updatedItem: OfflineSyncQueueItem = {
         ...existing,
+        currentVersion,
         request: {
           ...request,
           clientSubmitId,
+          version: currentVersion,
           updatedAt: now,
         },
         status: 'pending',
@@ -138,9 +141,11 @@ class OfflineSyncManager {
       nodeId,
       taskId,
       nodeType,
+      currentVersion,
       request: {
         ...request,
         clientSubmitId,
+        version: currentVersion,
         updatedAt: now,
       },
       status: 'pending',
@@ -306,12 +311,15 @@ class OfflineSyncManager {
     } else if (resolution === 'force_update') {
       const index = this.queue.findIndex((i) => i.clientSubmitId === clientSubmitId);
       if (index >= 0) {
+        const latestVersion = conflict.currentNode.version || 1;
         this.queue[index] = {
           ...this.queue[index],
+          currentVersion: latestVersion,
           status: 'pending',
           retryCount: 0,
           request: {
             ...this.queue[index].request,
+            version: latestVersion,
             updatedAt: new Date().toISOString(),
           },
         };
