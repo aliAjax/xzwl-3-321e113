@@ -10,7 +10,9 @@ import {
   Map,
   Send,
   X,
-
+  Phone,
+  Copy,
+  Check,
   LogOut,
   RefreshCw,
   ChevronRight,
@@ -18,6 +20,7 @@ import {
   Navigation,
   Home,
   CheckCheck,
+  User,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/utils/api'
@@ -59,6 +62,7 @@ function DriverMobile() {
   const [updateForm, setUpdateForm] = useState<NodeUpdateForm | null>(null)
   const [selectedTask, setSelectedTask] = useState<DeliveryTask | null>(null)
   const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active')
+  const [copiedAddressId, setCopiedAddressId] = useState<string | null>(null)
 
   const user = useAuthStore((state) => state.user)
   const logout = useAuthStore((state) => state.logout)
@@ -229,6 +233,48 @@ function DriverMobile() {
     }
   }
 
+  const handleCallPhone = (phone: string) => {
+    if (!phone) {
+      alert('电话号码不存在')
+      return
+    }
+    window.location.href = `tel:${phone}`
+  }
+
+  const handleCopyAddress = async (taskId: string, address: string) => {
+    if (!address) {
+      alert('地址不存在')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(address)
+      setCopiedAddressId(taskId)
+      setTimeout(() => setCopiedAddressId(null), 2000)
+    } catch {
+      const textArea = document.createElement('textarea')
+      textArea.value = address
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+      setCopiedAddressId(taskId)
+      setTimeout(() => setCopiedAddressId(null), 2000)
+    }
+  }
+
+  const getNextStepHint = (node: DeliveryNode | undefined): string => {
+    if (!node) return ''
+    const hints: Record<NodeType, string> = {
+      warehouse_in: '请前往仓库完成货物入库',
+      loading: '请在仓库完成货物装车，检查数量和温度',
+      departure: '请确认车辆状态，开始运输',
+      arrival: '请前往配送地址，到达后确认位置',
+      delivery: '请联系客户进行配送，测量并记录温度',
+      signature: '请让客户签收确认，完成配送',
+    }
+    return hints[node.nodeType] || `请完成${NODE_LABELS[node.nodeType]?.label || node.nodeName}操作`
+  }
+
   const activeTasks = tasks.filter((t) => t.status !== 'completed' && t.status !== 'cancelled')
   const completedTasks = tasks.filter((t) => t.status === 'completed')
 
@@ -325,8 +371,94 @@ function DriverMobile() {
 
         {selectedTask?.id === task.id && (
           <div className="border-t border-gray-100 bg-gray-50">
-            <div className="p-4">
-              <h4 className="text-sm font-medium text-gray-700 mb-3">配送节点</h4>
+            <div className="p-4 space-y-4">
+              <div className="bg-white rounded-lg p-3 shadow-sm">
+                <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                  <User size={16} className="text-blue-500" />
+                  客户信息
+                </h4>
+                <div className="space-y-3">
+                  <div className="flex items-start gap-2">
+                    <User size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-500">联系人</p>
+                      <p className="text-sm text-gray-800 font-medium">
+                        {task.order?.customer?.contactName || task.order?.customer?.name || '暂无联系人信息'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Phone size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-500">联系电话</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-gray-800 font-medium">
+                          {task.order?.customer?.phone || '暂无电话信息'}
+                        </p>
+                        {task.order?.customer?.phone && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCallPhone(task.order!.customer!.phone)
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-600 rounded-md text-xs font-medium hover:bg-green-100 transition-colors"
+                          >
+                            <Phone size={12} />
+                            拨号
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <MapPin size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-500">配送地址</p>
+                      <div className="flex items-start gap-2">
+                        <p className="text-sm text-gray-800 flex-1">
+                          {task.order?.deliveryAddress || '暂无地址信息'}
+                        </p>
+                        {task.order?.deliveryAddress && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCopyAddress(task.id, task.order!.deliveryAddress)
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-600 rounded-md text-xs font-medium hover:bg-blue-100 transition-colors flex-shrink-0"
+                          >
+                            {copiedAddressId === task.id ? (
+                              <>
+                                <Check size={12} />
+                                已复制
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={12} />
+                                复制
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {currentNode && (
+                <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                  <h4 className="text-sm font-medium text-blue-700 mb-1 flex items-center gap-2">
+                    <Navigation size={16} />
+                    下一步操作提示
+                  </h4>
+                  <p className="text-sm text-blue-600">
+                    {getNextStepHint(currentNode)}
+                  </p>
+                </div>
+              )}
+
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">配送节点</h4>
               <div className="space-y-1">
                 {nodes.map((node, index) => {
                   const isActive = node.status === 'in_progress'
@@ -422,6 +554,7 @@ function DriverMobile() {
                 </button>
               </div>
             )}
+          </div>
           </div>
         )}
       </div>

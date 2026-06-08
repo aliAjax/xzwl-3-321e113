@@ -89,6 +89,10 @@ class TaskRepository extends BaseRepository<DeliveryTask> {
                 o.min_temp as order_min_temp,
                 o.max_temp as order_max_temp,
                 o.customer_id as order_customer_id,
+                c.name as customer_name,
+                c.contact_name as customer_contact_name,
+                c.phone as customer_phone,
+                c.address as customer_address,
                 v.plate_no as vehicle_plate_no,
                 v.vehicle_type as vehicle_vehicle_type,
                 d.name as driver_name,
@@ -96,6 +100,7 @@ class TaskRepository extends BaseRepository<DeliveryTask> {
          FROM ${this.tableName} t
          LEFT JOIN loading_batches b ON t.batch_id = b.id
          LEFT JOIN orders o ON t.order_id = o.id
+         LEFT JOIN customers c ON o.customer_id = c.id
          LEFT JOIN vehicles v ON t.vehicle_id = v.id
          LEFT JOIN drivers d ON t.driver_id = d.id
          WHERE t.id = ?`
@@ -137,6 +142,15 @@ class TaskRepository extends BaseRepository<DeliveryTask> {
         remarks: '',
         createdAt: '',
         updatedAt: '',
+        customer: row.customer_name ? {
+          id: row.order_customer_id as string,
+          name: row.customer_name as string,
+          contactName: row.customer_contact_name as string,
+          phone: row.customer_phone as string,
+          address: row.customer_address as string,
+          priority: 1,
+          createdAt: '',
+        } : undefined,
       };
     }
 
