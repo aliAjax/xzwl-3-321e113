@@ -43,6 +43,7 @@ const menuItems: MenuItem[] = [
   { path: '/orders', label: '订单管理', icon: Package, roles: ['admin', 'dispatcher'] },
   { path: '/orders/batch', label: '批量订单创建', icon: Layers, roles: ['admin', 'dispatcher'] },
   { path: '/warehouse', label: '入仓登记', icon: Archive, roles: ['admin', 'dispatcher'] },
+  { path: '/dispatch-sandbox', label: '调度沙盘', icon: Layers, roles: ['admin', 'dispatcher'] },
   { path: '/dispatch', label: '调度中心', icon: ClipboardList, roles: ['admin', 'dispatcher'] },
   { path: '/loading', label: '装车管理', icon: Warehouse, roles: ['admin', 'dispatcher'] },
   { path: '/delivery', label: '配送执行', icon: MapPin, roles: ['admin', 'dispatcher'] },

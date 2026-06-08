@@ -18,6 +18,7 @@ import ExceptionHandling from '@/pages/ExceptionHandling'
 import TemperatureRecordImport from '@/pages/TemperatureRecordImport'
 import BatchOrderCreate from '@/pages/BatchOrderCreate'
 import DriverMobile from '@/pages/DriverMobile'
+import DispatchSandbox from '@/pages/DispatchSandbox'
 import type { UserRole } from '@shared/types'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -146,6 +147,14 @@ function App() {
           element={
             <RoleRoute allowedRoles={['admin', 'dispatcher']}>
               <Dispatch />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="dispatch-sandbox"
+          element={
+            <RoleRoute allowedRoles={['admin', 'dispatcher']}>
+              <DispatchSandbox />
             </RoleRoute>
           }
         />

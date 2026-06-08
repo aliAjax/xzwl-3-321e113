@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import {
   Truck,
   User,
@@ -16,6 +17,7 @@ import {
   MapPin,
   ChevronRight,
   ArrowRight,
+  Layers,
 } from 'lucide-react'
 import { api } from '@/utils/api'
 import {
@@ -39,6 +41,8 @@ import type {
 import clsx from 'clsx'
 
 function Dispatch() {
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
   const [orders, setOrders] = useState<Order[]>([])
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
   const [drivers, setDrivers] = useState<Driver[]>([])
@@ -56,10 +60,52 @@ function Dispatch() {
   const [conflictInfo, setConflictInfo] = useState<string[]>([])
   const [previewResult, setPreviewResult] = useState<DispatchPreviewResult | null>(null)
   const [showPreview, setShowPreview] = useState(false)
+  const [fromSandbox, setFromSandbox] = useState(false)
 
   useEffect(() => {
     loadData()
   }, [])
+
+  useEffect(() => {
+    if (loading || orders.length === 0 || vehicles.length === 0 || drivers.length === 0 || routes.length === 0) {
+      return
+    }
+
+    const orderIdsParam = searchParams.get('orderIds')
+    const vehicleIdParam = searchParams.get('vehicleId')
+    const driverIdParam = searchParams.get('driverId')
+    const routeIdParam = searchParams.get('routeId')
+    const scheduledTimeParam = searchParams.get('scheduledDepartureTime')
+    const fromSandboxParam = searchParams.get('fromSandbox')
+
+    if (fromSandboxParam === 'true') {
+      setFromSandbox(true)
+
+      if (orderIdsParam) {
+        const orderIds = orderIdsParam.split(',')
+        const validOrderIds = orderIds.filter(id => orders.some(o => o.id === id))
+        if (validOrderIds.length > 0) {
+          setSelectedOrders(validOrderIds)
+        }
+      }
+
+      if (vehicleIdParam && vehicles.some(v => v.id === vehicleIdParam)) {
+        setSelectedVehicle(vehicleIdParam)
+      }
+
+      if (driverIdParam && drivers.some(d => d.id === driverIdParam)) {
+        setSelectedDriver(driverIdParam)
+      }
+
+      if (routeIdParam && routes.some(r => r.id === routeIdParam)) {
+        setSelectedRoute(routeIdParam)
+      }
+
+      if (scheduledTimeParam) {
+        setScheduledTime(scheduledTimeParam)
+      }
+    }
+  }, [loading, orders, vehicles, drivers, routes, searchParams])
 
   async function loadData() {
     try {
@@ -204,6 +250,7 @@ function Dispatch() {
     setMatchResults([])
     setPreviewResult(null)
     setShowPreview(false)
+    setFromSandbox(false)
   }
 
   function getConflictIcon(type: DispatchPreviewConflict['type']) {
@@ -245,15 +292,36 @@ function Dispatch() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-800">调度中心</h1>
-        <button
-          onClick={loadData}
-          className="btn-secondary flex items-center gap-2"
-        >
-          <RefreshCw size={16} />
-          刷新
-        </button>
+      <div className="space-y-4">
+        {fromSandbox && (
+          <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
+                <Layers size={20} className="text-purple-600" />
+              </div>
+              <div>
+                <p className="font-medium text-purple-800">已从调度沙盘带入方案</p>
+                <p className="text-sm text-purple-600">系统已自动填充车辆、司机、线路和时间信息，请确认后执行调度</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setFromSandbox(false)}
+              className="text-sm text-purple-600 hover:text-purple-800"
+            >
+              知道了
+            </button>
+          </div>
+        )}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-800">调度中心</h1>
+          <button
+            onClick={loadData}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <RefreshCw size={16} />
+            刷新
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

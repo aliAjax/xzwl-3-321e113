@@ -476,3 +476,67 @@ export interface TemperatureRecordImportResult {
     message: string;
   }>;
 }
+
+export interface DispatchSandboxGenerateRequest {
+  orderIds: string[];
+  scheduledDepartureTime?: string;
+  maxPlans?: number;
+}
+
+export interface DispatchSandboxPlan {
+  planId: string;
+  planName: string;
+  vehicleId: string;
+  plateNo: string;
+  vehicleType: string;
+  driverId: string;
+  driverName: string;
+  routeId: string;
+  routeName: string;
+  totalWeight: number;
+  totalQuantity: number;
+  vehicleCapacity: number;
+  vehicleCapacityUsed: number;
+  vehicleCapacityPercent: number;
+  temperatureZones: TemperatureZone[];
+  vehicleTemperatureZones: TemperatureZone[];
+  temperatureMatch: boolean;
+  stopCount: number;
+  estimatedDurationMinutes: number;
+  estimatedArrivalTime: string;
+  scheduledDepartureTime: string;
+  conflictCount: number;
+  warningCount: number;
+  score: number;
+  canDispatch: boolean;
+  conflicts: DispatchPreviewConflict[];
+}
+
+export interface DispatchSandboxPlanDetail extends DispatchPreviewResult {
+  planId: string;
+  planName: string;
+  score: number;
+  route: {
+    id: string;
+    name: string;
+    stopCount: number;
+    stops: RouteStop[];
+  } | null;
+}
+
+export interface DispatchSandboxResult {
+  totalOrders: number;
+  totalWeight: number;
+  totalQuantity: number;
+  requiredTemperatureZones: TemperatureZone[];
+  plans: DispatchSandboxPlan[];
+}
+
+export interface DispatchSandboxApplyRequest {
+  planId: string;
+  orderIds: string[];
+  vehicleId: string;
+  driverId: string;
+  routeId: string;
+  scheduledDepartureTime: string;
+}

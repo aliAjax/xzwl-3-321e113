@@ -20,6 +20,10 @@ import type {
   DispatchPreviewConflict,
   DispatchPreviewSuggestion,
   DispatchPreviewOrder,
+  DispatchSandboxGenerateRequest,
+  DispatchSandboxResult,
+  DispatchSandboxPlan,
+  DispatchSandboxPlanDetail,
 } from '../../shared/types';
 
 function generateBatchNo(): string {
@@ -655,5 +659,246 @@ export const dispatchService = {
     return batchRepository.findByDateRange(startDate, endDate).map(batch =>
       batchRepository.findByIdWithDetails(batch.id)
     ).filter(Boolean);
+  },
+
+  generateSandboxPlans(request: DispatchSandboxGenerateRequest): DispatchSandboxResult {
+    const { orderIds, scheduledDepartureTime, maxPlans = 10 } = request;
+
+    const orders = orderIds
+      .map(id => orderRepository.findById(id))
+      .filter((o): o is Order => o !== undefined);
+
+    if (orders.length === 0) {
+      throw new Error('未找到有效的订单');
+    }
+
+    const totalWeight = orders.reduce((sum, o) => sum + o.weight, 0);
+    const totalQuantity = orders.reduce((sum, o) => sum + o.quantity, 0);
+    const requiredZones = [...new Set(orders.map(o => o.temperatureZone))];
+
+    const activeVehicles = vehicleRepository.findByStatus('active').filter(v =>
+      v.id !== WAREHOUSE_VEHICLE_ID
+    );
+    const onDutyDrivers = driverRepository.findByStatus('on_duty').filter(d =>
+      d.id !== WAREHOUSE_DRIVER_ID
+    );
+    const allRoutes = routeRepository.findAll();
+
+    const scheduledTime = scheduledDepartureTime || new Date().toISOString();
+
+    const plans: DispatchSandboxPlan[] = [];
+    let planIndex = 0;
+
+    const matchResults = this.findMatchingVehicles(orderIds, scheduledTime);
+
+    for (const match of matchResults) {
+      const vehicle = activeVehicles.find(v => v.id === match.vehicleId);
+      const driver = onDutyDrivers.find(d => d.id === match.driverId);
+      if (!vehicle || !driver) continue;
+
+      for (const route of allRoutes) {
+        if (plans.length >= maxPlans) break;
+
+        try {
+          const previewRequest: DispatchPreviewRequest = {
+            orderIds,
+            vehicleId: vehicle.id,
+            driverId: driver.id,
+            routeId: route.id,
+            scheduledDepartureTime: scheduledTime,
+          };
+
+          const preview = this.previewDispatch(previewRequest);
+
+          const { score: matchScore } = this.calculateMatchScore(
+            vehicle,
+            driver,
+            orders,
+            scheduledTime
+          );
+
+          const routeScore = this.calculateRouteMatchScore(route, orders);
+          const finalScore = Math.round((matchScore * 0.7) + (routeScore * 0.3));
+
+          planIndex++;
+          plans.push({
+            planId: `plan-${Date.now()}-${planIndex}`,
+            planName: `方案 ${planIndex}`,
+            vehicleId: vehicle.id,
+            plateNo: vehicle.plateNo,
+            vehicleType: vehicle.vehicleType,
+            driverId: driver.id,
+            driverName: driver.name,
+            routeId: route.id,
+            routeName: route.name,
+            totalWeight: preview.totalWeight,
+            totalQuantity: preview.totalQuantity,
+            vehicleCapacity: vehicle.capacity,
+            vehicleCapacityUsed: preview.vehicleCapacityUsed,
+            vehicleCapacityPercent: preview.vehicleCapacityPercent,
+            temperatureZones: preview.temperatureZones,
+            vehicleTemperatureZones: vehicle.temperatureZones,
+            temperatureMatch: match.temperatureMatch,
+            stopCount: route.stops.length,
+            estimatedDurationMinutes: preview.estimatedDurationMinutes,
+            estimatedArrivalTime: preview.estimatedArrivalTime,
+            scheduledDepartureTime: scheduledTime,
+            conflictCount: preview.conflicts.length,
+            warningCount: preview.warnings.length,
+            score: finalScore,
+            canDispatch: preview.canDispatch,
+            conflicts: preview.conflicts,
+          });
+        } catch {
+          continue;
+        }
+      }
+
+      if (plans.length >= maxPlans) break;
+    }
+
+    if (plans.length === 0) {
+      for (const vehicle of activeVehicles.slice(0, 3)) {
+        for (const driver of onDutyDrivers.slice(0, 2)) {
+          for (const route of allRoutes.slice(0, 2)) {
+            if (plans.length >= maxPlans) break;
+
+            try {
+              const previewRequest: DispatchPreviewRequest = {
+                orderIds,
+                vehicleId: vehicle.id,
+                driverId: driver.id,
+                routeId: route.id,
+                scheduledDepartureTime: scheduledTime,
+              };
+
+              const preview = this.previewDispatch(previewRequest);
+              const { score: matchScore } = this.calculateMatchScore(
+                vehicle,
+                driver,
+                orders,
+                scheduledTime
+              );
+              const routeScore = this.calculateRouteMatchScore(route, orders);
+              const finalScore = Math.round((matchScore * 0.7) + (routeScore * 0.3));
+
+              planIndex++;
+              plans.push({
+                planId: `plan-${Date.now()}-${planIndex}`,
+                planName: `方案 ${planIndex}`,
+                vehicleId: vehicle.id,
+                plateNo: vehicle.plateNo,
+                vehicleType: vehicle.vehicleType,
+                driverId: driver.id,
+                driverName: driver.name,
+                routeId: route.id,
+                routeName: route.name,
+                totalWeight: preview.totalWeight,
+                totalQuantity: preview.totalQuantity,
+                vehicleCapacity: vehicle.capacity,
+                vehicleCapacityUsed: preview.vehicleCapacityUsed,
+                vehicleCapacityPercent: preview.vehicleCapacityPercent,
+                temperatureZones: preview.temperatureZones,
+                vehicleTemperatureZones: vehicle.temperatureZones,
+                temperatureMatch: this.checkTemperatureMatch(vehicle, requiredZones),
+                stopCount: route.stops.length,
+                estimatedDurationMinutes: preview.estimatedDurationMinutes,
+                estimatedArrivalTime: preview.estimatedArrivalTime,
+                scheduledDepartureTime: scheduledTime,
+                conflictCount: preview.conflicts.length,
+                warningCount: preview.warnings.length,
+                score: finalScore,
+                canDispatch: preview.canDispatch,
+                conflicts: preview.conflicts,
+              });
+            } catch {
+              continue;
+            }
+          }
+        }
+      }
+    }
+
+    plans.sort((a, b) => {
+      if (a.canDispatch !== b.canDispatch) return a.canDispatch ? -1 : 1;
+      if (b.score !== a.score) return b.score - a.score;
+      return a.conflictCount - b.conflictCount;
+    });
+
+    plans.forEach((plan, index) => {
+      plan.planName = `方案 ${index + 1}`;
+    });
+
+    return {
+      totalOrders: orders.length,
+      totalWeight,
+      totalQuantity,
+      requiredTemperatureZones: requiredZones,
+      plans,
+    };
+  },
+
+  calculateRouteMatchScore(route: Route, orders: Order[]): number {
+    let score = 0;
+    const orderAddresses = orders.map(o => o.deliveryAddress);
+    const routeAddresses = route.stops.map(s => s.address);
+
+    for (const orderAddr of orderAddresses) {
+      const isMatched = routeAddresses.some(
+        rAddr => rAddr.includes(orderAddr) || orderAddr.includes(rAddr)
+      );
+      if (isMatched) {
+        score += Math.floor(100 / orders.length);
+      }
+    }
+
+    return Math.min(score, 100);
+  },
+
+  getSandboxPlanDetail(
+    orderIds: string[],
+    vehicleId: string,
+    driverId: string,
+    routeId: string,
+    scheduledDepartureTime: string,
+    planId: string,
+    planName: string
+  ): DispatchSandboxPlanDetail {
+    const previewRequest: DispatchPreviewRequest = {
+      orderIds,
+      vehicleId,
+      driverId,
+      routeId,
+      scheduledDepartureTime,
+    };
+
+    const preview = this.previewDispatch(previewRequest);
+    const vehicle = vehicleRepository.findById(vehicleId);
+    const driver = driverRepository.findById(driverId);
+    const route = routeRepository.findById(routeId);
+
+    const orders = orderIds
+      .map(id => orderRepository.findById(id))
+      .filter((o): o is Order => o !== undefined);
+
+    const { score } = this.calculateMatchScore(
+      vehicle!,
+      driver!,
+      orders,
+      scheduledDepartureTime
+    );
+
+    return {
+      ...preview,
+      planId,
+      planName,
+      score,
+      route: route ? {
+        id: route.id,
+        name: route.name,
+        stopCount: route.stops.length,
+        stops: route.stops,
+      } : null,
+    };
   },
 };

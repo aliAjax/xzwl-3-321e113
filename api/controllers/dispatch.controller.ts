@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 import { dispatchService } from '../services/dispatch.service';
-import type { DispatchRequest, DispatchPreviewRequest } from '../../shared/types';
+import type {
+  DispatchRequest,
+  DispatchPreviewRequest,
+  DispatchSandboxGenerateRequest,
+} from '../../shared/types';
 
 export const dispatchController = {
   async findMatches(req: Request, res: Response): Promise<Response> {
@@ -136,6 +140,65 @@ export const dispatchController = {
       return res.status(200).json({ message: '取消成功' });
     } catch (error) {
       return res.status(500).json({ message: '取消调度失败', error: (error as Error).message });
+    }
+  },
+
+  async generateSandboxPlans(req: Request, res: Response): Promise<Response> {
+    try {
+      const request = req.body as DispatchSandboxGenerateRequest;
+
+      if (!request.orderIds || request.orderIds.length === 0) {
+        return res.status(400).json({ message: '订单ID列表不能为空' });
+      }
+
+      const result = dispatchService.generateSandboxPlans(request);
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(500).json({ message: '生成沙盘方案失败', error: (error as Error).message });
+    }
+  },
+
+  async getSandboxPlanDetail(req: Request, res: Response): Promise<Response> {
+    try {
+      const { orderIds, vehicleId, driverId, routeId, scheduledDepartureTime, planId, planName } = req.body as {
+        orderIds: string[];
+        vehicleId: string;
+        driverId: string;
+        routeId: string;
+        scheduledDepartureTime: string;
+        planId: string;
+        planName: string;
+      };
+
+      if (!orderIds || orderIds.length === 0) {
+        return res.status(400).json({ message: '订单ID列表不能为空' });
+      }
+      if (!vehicleId) {
+        return res.status(400).json({ message: '车辆ID不能为空' });
+      }
+      if (!driverId) {
+        return res.status(400).json({ message: '司机ID不能为空' });
+      }
+      if (!routeId) {
+        return res.status(400).json({ message: '线路ID不能为空' });
+      }
+      if (!scheduledDepartureTime) {
+        return res.status(400).json({ message: '预计发车时间不能为空' });
+      }
+
+      const detail = dispatchService.getSandboxPlanDetail(
+        orderIds,
+        vehicleId,
+        driverId,
+        routeId,
+        scheduledDepartureTime,
+        planId,
+        planName
+      );
+
+      return res.status(200).json(detail);
+    } catch (error) {
+      return res.status(500).json({ message: '获取方案详情失败', error: (error as Error).message });
     }
   },
 };
