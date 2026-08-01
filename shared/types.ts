@@ -813,3 +813,119 @@ export interface DispatchSandboxApplyRequest {
   routeId: string;
   scheduledDepartureTime: string;
 }
+
+export type TemperatureEvidenceSource = 'csv_import' | 'driver_offline' | 'historical_backfill';
+
+export const TEMPERATURE_EVIDENCE_SOURCE_PRIORITY: Record<TemperatureEvidenceSource, number> = {
+  driver_offline: 1,
+  csv_import: 2,
+  historical_backfill: 3,
+};
+
+export interface TemperatureEvidence {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  originalPayload: string;
+  normalizedTempC: number;
+  observedAt: string;
+  receivedAt: string;
+  locationText: string;
+  operatorName: string;
+  payloadHash: string;
+  isAbnormal: boolean;
+  createdAt: string;
+}
+
+export interface TemperatureEvidenceSubmitRecord {
+  readingKey: string;
+  nodeId: string;
+  temperatureC: number;
+  observedAt: string;
+  locationText?: string;
+  operatorName?: string;
+  originalPayload?: Record<string, unknown>;
+}
+
+export interface TemperatureEvidenceDriverSubmitRequest {
+  records: TemperatureEvidenceSubmitRecord[];
+}
+
+export interface TemperatureEvidenceBackfillRequest {
+  records: TemperatureEvidenceSubmitRecord[];
+}
+
+export interface TemperatureEvidenceSubmitResultItem {
+  readingKey: string;
+  status: 'created' | 'duplicate' | 'conflict' | 'error';
+  evidenceId?: string;
+  message: string;
+}
+
+export interface TemperatureEvidenceSubmitResponse {
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  totalCount: number;
+  createdCount: number;
+  duplicateCount: number;
+  conflictCount: number;
+  errorCount: number;
+  results: TemperatureEvidenceSubmitResultItem[];
+}
+
+export interface TemperatureEvidenceTimelineEntry {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  temperatureCelsius: number;
+  normalizedTempC: number;
+  observedAt: string;
+  receivedAt: string;
+  locationText: string;
+  operatorName: string;
+  isAbnormal: boolean;
+  isAnomalous: boolean;
+  sourcePriority: number;
+  createdAt: string;
+}
+
+export interface TemperatureEvidenceNodeSummary {
+  nodeId: string;
+  totalEvidenceCount: number;
+  abnormalCount: number;
+  latestObservedAt?: string;
+  hasAnomaly: boolean;
+  anomalousEvidence: TemperatureEvidence[];
+}
+
+export interface TemperatureEvidenceBatchSummary {
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  totalCount: number;
+  createdCount: number;
+  duplicateCount: number;
+  conflictCount: number;
+  errorCount: number;
+  receivedAt: string;
+}
+
+export interface TemperatureEvidenceListResponse {
+  items: TemperatureEvidence[];
+  total: number;
+}
+
+export interface TemperatureEvidenceTimelineResponse {
+  taskId: string;
+  entries: TemperatureEvidenceTimelineEntry[];
+  hasAnomaly: boolean;
+  totalCount: number;
+  abnormalCount: number;
+}

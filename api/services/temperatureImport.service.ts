@@ -3,6 +3,8 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import { temperatureEvidenceService } from './temperatureEvidence/index.js';
+import { parseObservedAt, DEFAULT_CSV_OFFSET_MINUTES } from './temperatureEvidence/index.js';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -17,6 +19,8 @@ import type {
   DeliveryTask,
   TemperatureRecordColumnMapping,
   TemperatureRecordColumnParseResult,
+  TemperatureRecordFieldKey,
+  TemperatureEvidenceSubmitRecord,
 } from '../../shared/types';
 
 function generateId(): string {
@@ -47,7 +51,7 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-const columnHeaderMatchers: Record<string, string[]> = {
+const columnHeaderMatchers: Record<TemperatureRecordFieldKey, string[]> = {
   orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
   nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
   recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
@@ -72,12 +76,14 @@ function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
   };
 
   const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
+  const fieldKeys: TemperatureRecordFieldKey[] = ['orderNo', 'nodeType', 'recordedAt', 'temperature', 'locationText', 'operatorName'];
 
-  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+  for (const field of fieldKeys) {
+    const patterns = columnHeaderMatchers[field];
     for (let i = 0; i < normalizedHeaders.length; i++) {
       const header = normalizedHeaders[i];
       if (patterns.some(pattern => header.includes(pattern))) {
-        (mapping as any)[field] = i;
+        mapping[field] = i;
         break;
       }
     }
@@ -418,6 +424,22 @@ function previewImport(csvText: string, mapping?: TemperatureRecordColumnMapping
   };
 }
 
+function buildCsvReadingKey(
+  orderNo: string,
+  nodeType: NodeType,
+  recordedAtRaw: string
+): string {
+  try {
+    const observedAt = parseObservedAt(recordedAtRaw, {
+      requireTimezone: false,
+      defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
+    });
+    return `csv:${orderNo}:${nodeType}:${observedAt.toISOString()}`;
+  } catch {
+    return `csv:${orderNo}:${nodeType}:${recordedAtRaw}`;
+  }
+}
+
 function executeImport(
   records: TemperatureRecordValidationResult[],
   operator: User
@@ -427,6 +449,7 @@ function executeImport(
   let failedCount = 0;
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
+  const evidenceRecords: TemperatureEvidenceSubmitRecord[] = [];
 
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
@@ -519,6 +542,34 @@ function executeImport(
         successCount++;
         exceptionCreatedCount++;
       }
+
+      if (parsed.temperature !== null && parsed.recordedAt) {
+        const observedAtIso = parsed.recordedAt.toISOString();
+        const readingKey = buildCsvReadingKey(
+          parsed.orderNo,
+          node.nodeType,
+          observedAtIso
+        );
+        evidenceRecords.push({
+          readingKey,
+          nodeId: node.id,
+          temperatureC: parsed.temperature,
+          observedAt: observedAtIso,
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName || operator.name,
+          originalPayload: {
+            source: 'csv_import',
+            lineNumber: record.lineNumber,
+            orderNo: parsed.orderNo,
+            nodeType: node.nodeType,
+            temperature: parsed.temperature,
+            recordedAt: observedAtIso,
+            locationText: parsed.locationText,
+            operatorName: parsed.operatorName,
+            failureReasons: record.failureReasons,
+          },
+        });
+      }
     } catch (error) {
       results.push({
         lineNumber: record.lineNumber,
@@ -529,6 +580,14 @@ function executeImport(
         message: `导入失败: ${error instanceof Error ? error.message : '未知错误'}`,
       });
       failedCount++;
+    }
+  }
+
+  if (evidenceRecords.length > 0) {
+    try {
+      temperatureEvidenceService.submitCsvImport(evidenceRecords);
+    } catch (e) {
+      console.error('温度证据账本写入失败:', e instanceof Error ? e.message : e);
     }
   }
 
