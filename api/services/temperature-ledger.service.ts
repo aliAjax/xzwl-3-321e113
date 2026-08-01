@@ -1,0 +1,657 @@
+import { randomUUID } from 'node:crypto';
+import {
+  temperatureEvidenceRepository,
+  type CreateEvidenceRecord,
+} from '../repositories/temperature-evidence.repository';
+import { orderRepository } from '../repositories/order.repository';
+import { taskRepository } from '../repositories/task.repository';
+import { nodeRepository } from '../repositories/node.repository';
+import { computePayloadHash, canonicalizePayload } from '../utils/fingerprint';
+import {
+  celsiusToCenti,
+  centiToCelsius,
+  parseObservedAt,
+  normalizeReceivedAt,
+  asString,
+  asNumber,
+  asOptionalString,
+  isNonEmptyString,
+} from '../utils/temperature-normalization';
+import {
+  LedgerConflictError,
+  LedgerValidationError,
+  EVIDENCE_SOURCE_PRIORITY,
+} from '../../shared/temperature-ledger.types';
+import type {
+  TemperatureEvidence,
+  TemperatureEvidenceInput,
+  EvidenceBatchCreateResult,
+  EvidenceBatchItemResult,
+  EvidenceTimeline,
+  EvidenceTimelineEntry,
+  EvidenceSource,
+  DriverOfflineReading,
+  HistoricalBackfillReading,
+} from '../../shared/temperature-ledger.types';
+import type { NodeType, Order } from '../../shared/types';
+
+const NODE_TYPE_VALUES: ReadonlySet<string> = new Set([
+  'warehouse_in',
+  'loading',
+  'departure',
+  'arrival',
+  'delivery',
+  'signature',
+]);
+
+function isNodeType(value: unknown): value is NodeType {
+  return typeof value === 'string' && NODE_TYPE_VALUES.has(value);
+}
+
+function asNodeType(value: unknown, field: string): NodeType {
+  if (!isNodeType(value)) {
+    throw new LedgerValidationError(field, `${field} 必须是有效节点类型`);
+  }
+  return value;
+}
+
+const CSV_NODE_TYPE_MAP: Readonly<Record<string, NodeType>> = {
+  '入库': 'warehouse_in',
+  'warehouse_in': 'warehouse_in',
+  '装车': 'loading',
+  'loading': 'loading',
+  '出发': 'departure',
+  'departure': 'departure',
+  '到达': 'arrival',
+  'arrival': 'arrival',
+  '配送': 'delivery',
+  'delivery': 'delivery',
+  '签收': 'signature',
+  'signature': 'signature',
+};
+
+const SOURCE_LABELS: Record<EvidenceSource, string> = {
+  csv_import: 'CSV导入',
+  driver_offline: '司机离线',
+  historical_backfill: '历史回填',
+};
+
+interface CsvHeaderMap {
+  orderNo: number;
+  nodeType: number;
+  recordedAt: number;
+  temperature: number;
+  locationText?: number;
+  operatorName?: number;
+}
+
+interface RawCsvRow {
+  values: string[];
+  lineNumber: number;
+}
+
+function detectSeparator(headerLine: string): string {
+  if (headerLine.includes('\t')) return '\t';
+  if (headerLine.includes(',')) return ',';
+  return ',';
+}
+
+function splitCsvLine(line: string, separator: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (inQuotes) {
+      if (char === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === separator) {
+        result.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+  }
+  result.push(current);
+  return result.map(cell => cell.trim());
+}
+
+function buildHeaderMap(headers: string[]): CsvHeaderMap {
+  const normalized = headers.map(h => h.trim().toLowerCase());
+
+  const findIndex = (patterns: ReadonlyArray<string>): number | undefined => {
+    for (let i = 0; i < normalized.length; i++) {
+      const header = normalized[i];
+      if (patterns.some(p => header.includes(p))) {
+        return i;
+      }
+    }
+    return undefined;
+  };
+
+  const orderNo = findIndex(['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号']);
+  const nodeType = findIndex(['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节']);
+  const recordedAt = findIndex(['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间']);
+  const temperature = findIndex(['温度', '温度值', 'temperature', 'temp', '测温值']);
+  const locationText = findIndex(['位置', 'locationtext', 'location', '地点', '地址', '存放位置']);
+  const operatorName = findIndex(['操作人', 'operatorname', 'operator', '操作员', '经办人', '负责人']);
+
+  if (orderNo === undefined) throw new LedgerValidationError('csv', 'CSV缺少订单号列');
+  if (nodeType === undefined) throw new LedgerValidationError('csv', 'CSV缺少节点类型列');
+  if (recordedAt === undefined) throw new LedgerValidationError('csv', 'CSV缺少记录时间列');
+  if (temperature === undefined) throw new LedgerValidationError('csv', 'CSV缺少温度列');
+
+  return { orderNo, nodeType, recordedAt, temperature, locationText, operatorName };
+}
+
+interface ParsedCsvEvidence {
+  lineNumber: number;
+  readingKey: string;
+  orderNo: string;
+  nodeType: NodeType;
+  temperatureCelsius: number;
+  observedAt: string;
+  locationText?: string;
+  operatorName?: string;
+  rawPayload: Record<string, unknown>;
+}
+
+function parseCsvToEvidenceInputs(csvText: string): ParsedCsvEvidence[] {
+  const text = csvText.replace(/^\uFEFF/, '').trim();
+  if (text === '') {
+    throw new LedgerValidationError('csv', 'CSV内容为空');
+  }
+
+  const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+  if (lines.length < 2) {
+    throw new LedgerValidationError('csv', 'CSV至少需要表头和一行数据');
+  }
+
+  const separator = detectSeparator(lines[0]);
+  const headers = splitCsvLine(lines[0], separator);
+  const headerMap = buildHeaderMap(headers);
+
+  const result: ParsedCsvEvidence[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = splitCsvLine(lines[i], separator);
+    const row: RawCsvRow = { values, lineNumber: i + 1 };
+
+    const orderNo = asString(values[headerMap.orderNo], 'orderNo');
+    const nodeTypeRaw = (values[headerMap.nodeType] ?? '').trim().toLowerCase();
+    const nodeType = CSV_NODE_TYPE_MAP[nodeTypeRaw];
+    if (!nodeType) {
+      throw new LedgerValidationError('nodeType', `第${row.lineNumber}行节点类型无效: ${values[headerMap.nodeType] ?? ''}`);
+    }
+    const recordedAtRaw = asString(values[headerMap.recordedAt], 'recordedAt');
+    const temperatureCelsius = asNumber(values[headerMap.temperature], 'temperature');
+    const locationText = headerMap.locationText !== undefined
+      ? asOptionalString(values[headerMap.locationText])
+      : undefined;
+    const operatorName = headerMap.operatorName !== undefined
+      ? asOptionalString(values[headerMap.operatorName])
+      : undefined;
+
+    const observedAt = parseObservedAt(recordedAtRaw, 'csv_import');
+    const readingKey = `csv:${orderNo}:${nodeType}:${observedAt}`;
+
+    const rawPayload: Record<string, unknown> = {
+      orderNo,
+      nodeType,
+      recordedAt: recordedAtRaw,
+      temperature: temperatureCelsius,
+      locationText: locationText ?? null,
+      operatorName: operatorName ?? null,
+      lineNumber: row.lineNumber,
+    };
+
+    result.push({
+      lineNumber: row.lineNumber,
+      readingKey,
+      orderNo,
+      nodeType,
+      temperatureCelsius,
+      observedAt,
+      locationText,
+      operatorName,
+      rawPayload,
+    });
+  }
+
+  return result;
+}
+
+function judgeTemperature(temperatureCelsius: number, order: Order): { judgment: 'normal' | 'abnormal'; reasons: string[]; minTemp: number; maxTemp: number } {
+  const reasons: string[] = [];
+  if (temperatureCelsius < order.minTemp) {
+    reasons.push(`温度 ${temperatureCelsius}°C 低于最低要求 ${order.minTemp}°C`);
+  }
+  if (temperatureCelsius > order.maxTemp) {
+    reasons.push(`温度 ${temperatureCelsius}°C 高于最高要求 ${order.maxTemp}°C`);
+  }
+  return {
+    judgment: reasons.length > 0 ? 'abnormal' : 'normal',
+    reasons,
+    minTemp: order.minTemp,
+    maxTemp: order.maxTemp,
+  };
+}
+
+interface ResolvedNodeContext {
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  order: Order;
+}
+
+function resolveNodeByOrderAndType(orderNo: string, nodeType: NodeType): ResolvedNodeContext | undefined {
+  const order = orderRepository.findByOrderNo(orderNo);
+  if (!order) return undefined;
+  const task = taskRepository.findByOrderId(order.id);
+  if (!task) return undefined;
+  const node = nodeRepository.findByTaskIdAndNodeType(task.id, nodeType);
+  if (!node) return undefined;
+  return { nodeId: node.id, taskId: task.id, orderId: order.id, order };
+}
+
+function resolveNodeById(nodeId: string): ResolvedNodeContext | undefined {
+  const node = nodeRepository.findById(nodeId);
+  if (!node) return undefined;
+  const task = taskRepository.findById(node.taskId);
+  if (!task) return undefined;
+  const order = orderRepository.findById(task.orderId);
+  if (!order) return undefined;
+  return { nodeId: node.id, taskId: task.id, orderId: order.id, order };
+}
+
+function buildTimelineEntry(evidence: TemperatureEvidence): EvidenceTimelineEntry {
+  return {
+    evidence,
+    temperatureCelsius: centiToCelsius(evidence.temperatureCenti),
+    sourceLabel: SOURCE_LABELS[evidence.source],
+    isAbnormal: evidence.judgment === 'abnormal',
+  };
+}
+
+function sortTimeline(entries: EvidenceTimelineEntry[]): EvidenceTimelineEntry[] {
+  return [...entries].sort((a, b) => {
+    const observedDiff = new Date(a.evidence.observedAt).getTime() - new Date(b.evidence.observedAt).getTime();
+    if (observedDiff !== 0) return observedDiff;
+    const sourceDiff = EVIDENCE_SOURCE_PRIORITY[a.evidence.source] - EVIDENCE_SOURCE_PRIORITY[b.evidence.source];
+    if (sourceDiff !== 0) return sourceDiff;
+    return new Date(a.evidence.receivedAt).getTime() - new Date(b.evidence.receivedAt).getTime();
+  });
+}
+
+export const temperatureLedgerService = {
+  generateBatchId(): string {
+    return `ev-${randomUUID()}`;
+  },
+
+  generateReadingKey(prefix: string, parts: ReadonlyArray<string>): string {
+    return `${prefix}:${parts.join(':')}`;
+  },
+
+  append(
+    input: TemperatureEvidenceInput,
+    batchId?: string
+  ): { evidence: TemperatureEvidence; idempotent: boolean } {
+    const readingKey = asString(input.readingKey, 'readingKey');
+    const rawPayload = input.rawPayload;
+    if (typeof rawPayload !== 'object' || rawPayload === null || Array.isArray(rawPayload)) {
+      throw new LedgerValidationError('rawPayload', 'rawPayload 必须是对象');
+    }
+
+    const temperatureCelsius = asNumber(input.temperatureCelsius, 'temperatureCelsius');
+    const observedAt = parseObservedAt(input.observedAt, input.source);
+    const receivedAt = normalizeReceivedAt(input.receivedAt);
+
+    const payloadHash = computePayloadHash(rawPayload);
+    const temperatureCenti = celsiusToCenti(temperatureCelsius);
+
+    const existing = temperatureEvidenceRepository.findByReadingKey(readingKey);
+    if (existing) {
+      if (existing.payloadHash === payloadHash) {
+        return { evidence: existing, idempotent: true };
+      }
+      throw new LedgerConflictError(existing, payloadHash);
+    }
+
+    let nodeId = input.nodeId;
+    let taskId = input.taskId;
+    let orderId = input.orderId;
+    let order: Order | undefined;
+    const nodeType = input.nodeType;
+
+    if (nodeId) {
+      const resolved = resolveNodeById(nodeId);
+      if (resolved) {
+        nodeId = resolved.nodeId;
+        taskId = resolved.taskId;
+        orderId = resolved.orderId;
+        order = resolved.order;
+      }
+    } else if (input.orderNo && nodeType) {
+      const resolved = resolveNodeByOrderAndType(input.orderNo, nodeType);
+      if (resolved) {
+        nodeId = resolved.nodeId;
+        taskId = resolved.taskId;
+        orderId = resolved.orderId;
+        order = resolved.order;
+      }
+    }
+
+    const judgment = order
+      ? judgeTemperature(temperatureCelsius, order)
+      : { judgment: 'normal' as const, reasons: [] as string[], minTemp: undefined, maxTemp: undefined };
+
+    const record: CreateEvidenceRecord = {
+      batchId: batchId ?? this.generateBatchId(),
+      source: input.source,
+      readingKey,
+      payloadHash,
+      rawPayload: canonicalizePayload(rawPayload),
+      temperatureCenti,
+      observedAt,
+      receivedAt,
+      nodeId,
+      taskId,
+      orderId,
+      nodeType,
+      orderNo: input.orderNo,
+      locationText: input.locationText,
+      operatorName: input.operatorName,
+      judgment: judgment.judgment,
+      abnormalReasons: judgment.reasons,
+      minTemp: judgment.minTemp,
+      maxTemp: judgment.maxTemp,
+      temperatureZone: order?.temperatureZone,
+    };
+
+    const evidence = temperatureEvidenceRepository.append(record);
+    return { evidence, idempotent: false };
+  },
+
+  appendDriverOffline(readings: DriverOfflineReading[]): EvidenceBatchCreateResult {
+    const batchId = this.generateBatchId();
+    const results: EvidenceBatchItemResult[] = [];
+    let success = 0;
+    let idempotent = 0;
+    let conflict = 0;
+    let failed = 0;
+
+    for (const reading of readings) {
+      try {
+        if (!isNonEmptyString(reading.readingKey)) {
+          throw new LedgerValidationError('readingKey', 'readingKey 不能为空');
+        }
+        asNodeType(reading.nodeType, 'nodeType');
+        parseObservedAt(reading.observedAt, 'driver_offline');
+
+        const rawPayload: Record<string, unknown> = {
+          readingKey: reading.readingKey,
+          nodeId: reading.nodeId,
+          taskId: reading.taskId,
+          orderId: reading.orderId ?? null,
+          nodeType: reading.nodeType,
+          temperature: reading.temperature,
+          observedAt: reading.observedAt,
+          locationText: reading.locationText ?? null,
+          operatorName: reading.operatorName ?? null,
+          clientSubmitId: reading.clientSubmitId ?? null,
+        };
+
+        const { evidence, idempotent: isIdempotent } = this.append(
+          {
+            source: 'driver_offline',
+            readingKey: reading.readingKey,
+            rawPayload,
+            temperatureCelsius: reading.temperature,
+            observedAt: reading.observedAt,
+            nodeId: reading.nodeId,
+            taskId: reading.taskId,
+            orderId: reading.orderId,
+            nodeType: reading.nodeType,
+            locationText: reading.locationText,
+            operatorName: reading.operatorName,
+          },
+          batchId
+        );
+
+        if (isIdempotent) {
+          idempotent++;
+          results.push({ readingKey: reading.readingKey, status: 'idempotent', evidenceId: evidence.id, message: '幂等成功（载荷相同）' });
+        } else {
+          success++;
+          results.push({ readingKey: reading.readingKey, status: 'created', evidenceId: evidence.id, message: '已入账' });
+        }
+      } catch (error) {
+        if (error instanceof LedgerConflictError) {
+          conflict++;
+          results.push({
+            readingKey: reading.readingKey,
+            status: 'conflict',
+            conflictEvidence: error.existingEvidence,
+            message: error.message,
+          });
+        } else {
+          failed++;
+          results.push({
+            readingKey: reading.readingKey,
+            status: 'failed',
+            message: error instanceof Error ? error.message : '未知错误',
+          });
+        }
+      }
+    }
+
+    return { batchId, total: readings.length, success, idempotent, conflict, failed, results };
+  },
+
+  appendHistoricalBackfill(readings: HistoricalBackfillReading[]): EvidenceBatchCreateResult {
+    const batchId = this.generateBatchId();
+    const results: EvidenceBatchItemResult[] = [];
+    let success = 0;
+    let idempotent = 0;
+    let conflict = 0;
+    let failed = 0;
+
+    for (const reading of readings) {
+      try {
+        if (!isNonEmptyString(reading.readingKey)) {
+          throw new LedgerValidationError('readingKey', 'readingKey 不能为空');
+        }
+        asNodeType(reading.nodeType, 'nodeType');
+        parseObservedAt(reading.observedAt, 'historical_backfill');
+
+        const rawPayload: Record<string, unknown> = {
+          readingKey: reading.readingKey,
+          orderNo: reading.orderNo,
+          nodeType: reading.nodeType,
+          temperature: reading.temperature,
+          observedAt: reading.observedAt,
+          locationText: reading.locationText ?? null,
+          operatorName: reading.operatorName ?? null,
+        };
+
+        const { evidence, idempotent: isIdempotent } = this.append(
+          {
+            source: 'historical_backfill',
+            readingKey: reading.readingKey,
+            rawPayload,
+            temperatureCelsius: reading.temperature,
+            observedAt: reading.observedAt,
+            orderNo: reading.orderNo,
+            nodeType: reading.nodeType,
+            locationText: reading.locationText,
+            operatorName: reading.operatorName,
+          },
+          batchId
+        );
+
+        if (isIdempotent) {
+          idempotent++;
+          results.push({ readingKey: reading.readingKey, status: 'idempotent', evidenceId: evidence.id, message: '幂等成功（载荷相同）' });
+        } else {
+          success++;
+          results.push({ readingKey: reading.readingKey, status: 'created', evidenceId: evidence.id, message: '已入账' });
+        }
+      } catch (error) {
+        if (error instanceof LedgerConflictError) {
+          conflict++;
+          results.push({
+            readingKey: reading.readingKey,
+            status: 'conflict',
+            conflictEvidence: error.existingEvidence,
+            message: error.message,
+          });
+        } else {
+          failed++;
+          results.push({
+            readingKey: reading.readingKey,
+            status: 'failed',
+            message: error instanceof Error ? error.message : '未知错误',
+          });
+        }
+      }
+    }
+
+    return { batchId, total: readings.length, success, idempotent, conflict, failed, results };
+  },
+
+  importCsv(csvText: string): EvidenceBatchCreateResult {
+    const parsedRows = parseCsvToEvidenceInputs(csvText);
+    const batchId = this.generateBatchId();
+    const results: EvidenceBatchItemResult[] = [];
+    let success = 0;
+    let idempotent = 0;
+    let conflict = 0;
+    let failed = 0;
+
+    for (const row of parsedRows) {
+      try {
+        const { evidence, idempotent: isIdempotent } = this.append(
+          {
+            source: 'csv_import',
+            readingKey: row.readingKey,
+            rawPayload: row.rawPayload,
+            temperatureCelsius: row.temperatureCelsius,
+            observedAt: row.observedAt,
+            orderNo: row.orderNo,
+            nodeType: row.nodeType,
+            locationText: row.locationText,
+            operatorName: row.operatorName,
+          },
+          batchId
+        );
+
+        if (isIdempotent) {
+          idempotent++;
+          results.push({
+            readingKey: row.readingKey,
+            status: 'idempotent',
+            evidenceId: evidence.id,
+            message: `第${row.lineNumber}行幂等成功（载荷相同）`,
+          });
+        } else {
+          success++;
+          results.push({
+            readingKey: row.readingKey,
+            status: 'created',
+            evidenceId: evidence.id,
+            message: `第${row.lineNumber}行已入账`,
+          });
+        }
+      } catch (error) {
+        if (error instanceof LedgerConflictError) {
+          conflict++;
+          results.push({
+            readingKey: row.readingKey,
+            status: 'conflict',
+            conflictEvidence: error.existingEvidence,
+            message: `第${row.lineNumber}行: ${error.message}`,
+          });
+        } else {
+          failed++;
+          results.push({
+            readingKey: row.readingKey,
+            status: 'failed',
+            message: `第${row.lineNumber}行: ${error instanceof Error ? error.message : '未知错误'}`,
+          });
+        }
+      }
+    }
+
+    return { batchId, total: parsedRows.length, success, idempotent, conflict, failed, results };
+  },
+
+  getTimelineByNode(nodeId: string): EvidenceTimeline {
+    const evidenceList = temperatureEvidenceRepository.findByNodeId(nodeId);
+    const entries = sortTimeline(evidenceList.map(buildTimelineEntry));
+    const abnormalEntries = entries.filter(e => e.isAbnormal);
+    const normalEntries = entries.filter(e => !e.isAbnormal);
+
+    return {
+      nodeId,
+      entries,
+      hasAbnormal: abnormalEntries.length > 0,
+      latestNormal: normalEntries.length > 0 ? normalEntries[normalEntries.length - 1] : undefined,
+      abnormalCount: abnormalEntries.length,
+    };
+  },
+
+  getTimelineByTask(taskId: string): EvidenceTimeline {
+    const evidenceList = temperatureEvidenceRepository.findByTaskId(taskId);
+    const entries = sortTimeline(evidenceList.map(buildTimelineEntry));
+    const abnormalEntries = entries.filter(e => e.isAbnormal);
+    const normalEntries = entries.filter(e => !e.isAbnormal);
+
+    return {
+      taskId,
+      entries,
+      hasAbnormal: abnormalEntries.length > 0,
+      latestNormal: normalEntries.length > 0 ? normalEntries[normalEntries.length - 1] : undefined,
+      abnormalCount: abnormalEntries.length,
+    };
+  },
+
+  getTimelineByOrder(orderId: string): EvidenceTimeline {
+    const evidenceList = temperatureEvidenceRepository.findByOrderId(orderId);
+    const entries = sortTimeline(evidenceList.map(buildTimelineEntry));
+    const abnormalEntries = entries.filter(e => e.isAbnormal);
+    const normalEntries = entries.filter(e => !e.isAbnormal);
+
+    return {
+      orderId,
+      entries,
+      hasAbnormal: abnormalEntries.length > 0,
+      latestNormal: normalEntries.length > 0 ? normalEntries[normalEntries.length - 1] : undefined,
+      abnormalCount: abnormalEntries.length,
+    };
+  },
+
+  getByReadingKey(readingKey: string): TemperatureEvidence | undefined {
+    return temperatureEvidenceRepository.findByReadingKey(readingKey);
+  },
+
+  getByBatchId(batchId: string): TemperatureEvidence[] {
+    return temperatureEvidenceRepository.findByBatchId(batchId);
+  },
+
+  nodeHasAbnormalEvidence(nodeId: string): boolean {
+    return temperatureEvidenceRepository.findAbnormalByNodeId(nodeId).length > 0;
+  },
+};
