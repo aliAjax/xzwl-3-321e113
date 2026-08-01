@@ -813,3 +813,126 @@ export interface DispatchSandboxApplyRequest {
   routeId: string;
   scheduledDepartureTime: string;
 }
+
+// ============ 温度证据账本（Temperature Evidence Ledger）============
+
+/**
+ * 证据来源：
+ * - driver_offline: 司机端离线上报（新数据，observedAt 必须携带时区）
+ * - csv_import: 温度记录 CSV 导入（旧数据，observedAt 缺时区按 +08:00 解析）
+ * - historical_backfill: 历史回填（旧数据，observedAt 缺时区按 +08:00 解析）
+ */
+export type TemperatureEvidenceSource = 'driver_offline' | 'csv_import' | 'historical_backfill';
+
+export const TEMPERATURE_EVIDENCE_SOURCES: readonly TemperatureEvidenceSource[] = [
+  'driver_offline',
+  'csv_import',
+  'historical_backfill',
+];
+
+/**
+ * 时间线展示优先级：同一 observedAt 时刻下，
+ * 依次采用司机离线记录、CSV 导入、历史回填。
+ */
+export const TEMPERATURE_EVIDENCE_SOURCE_PRIORITY: Record<TemperatureEvidenceSource, number> = {
+  driver_offline: 0,
+  csv_import: 1,
+  historical_backfill: 2,
+};
+
+/**
+ * 账本只追加、不覆盖。温度以摄氏度乘 100 的整数保存，
+ * API 边界再转换为摄氏度数值。observedAt/receivedAt 均为 UTC ISO 字符串。
+ */
+export interface TemperatureEvidence {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  rawPayload: string;
+  payloadHash: string;
+  temperatureCelsiusX100: number;
+  observedAt: string;
+  receivedAt: string;
+  createdAt: string;
+}
+
+/** 追加证据请求体（API 边界，温度为摄氏度数值） */
+export interface TemperatureEvidenceAppendRequest {
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  batchId?: string;
+  temperature: number;
+  observedAt: string;
+  rawPayload?: Record<string, unknown>;
+}
+
+export type TemperatureEvidenceAppendStatus = 'appended' | 'duplicate';
+
+export interface TemperatureEvidenceAppendResponse {
+  success: boolean;
+  status: TemperatureEvidenceAppendStatus;
+  evidence: TemperatureEvidence;
+}
+
+/** 相同 readingKey 但标准化载荷不同时返回 409，禁止强制覆盖 */
+export interface TemperatureEvidenceConflictResponse {
+  success: false;
+  message: string;
+  readingKey: string;
+  existingEvidenceId: string;
+  existingPayloadHash: string;
+  submittedPayloadHash: string;
+}
+
+export interface TemperatureEvidenceTimelineItem {
+  evidence: TemperatureEvidence;
+  /** API 边界转换后的摄氏度数值 */
+  temperature: number;
+  minTemp: number;
+  maxTemp: number;
+  isAbnormal: boolean;
+}
+
+/**
+ * 节点温度证据时间线。
+ * 每条异常证据都参与判定：较新的正常温度不能掩盖旧异常，
+ * 也不能自动关闭工单，abnormalEvidenceIds 保留全部异常证据。
+ */
+export interface TemperatureEvidenceTimeline {
+  nodeId: string;
+  taskId: string;
+  items: TemperatureEvidenceTimelineItem[];
+  abnormalEvidenceIds: string[];
+  hasAbnormalEvidence: boolean;
+}
+
+export interface TemperatureEvidenceSortable {
+  observedAt: string;
+  source: TemperatureEvidenceSource;
+  receivedAt: string;
+}
+
+/**
+ * 时间线排序：先按 observedAt 升序；同一时刻按来源优先级
+ * （司机离线 → CSV 导入 → 历史回填）；再按 receivedAt 升序。
+ */
+export function compareTemperatureEvidenceForTimeline(
+  a: TemperatureEvidenceSortable,
+  b: TemperatureEvidenceSortable
+): number {
+  if (a.observedAt !== b.observedAt) {
+    return a.observedAt < b.observedAt ? -1 : 1;
+  }
+  const priorityDiff =
+    TEMPERATURE_EVIDENCE_SOURCE_PRIORITY[a.source] - TEMPERATURE_EVIDENCE_SOURCE_PRIORITY[b.source];
+  if (priorityDiff !== 0) {
+    return priorityDiff;
+  }
+  if (a.receivedAt !== b.receivedAt) {
+    return a.receivedAt < b.receivedAt ? -1 : 1;
+  }
+  return 0;
+}
