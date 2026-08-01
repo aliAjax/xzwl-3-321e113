@@ -16,7 +16,7 @@ import exceptionRoutes from './routes/exception.routes';
 import temperatureImportRoutes from './routes/temperatureImport.routes';
 
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 app.use(cors());
 app.use(express.json());

@@ -234,7 +234,8 @@ class OfflineSyncManager {
     } catch (error) {
       this.updateItemRetryCount(item.clientSubmitId);
 
-      if (this.queue.find((i) => i.clientSubmitId === item.clientSubmitId)?.retryCount! >= MAX_RETRIES) {
+      const retryCount = this.queue.find((i) => i.clientSubmitId === item.clientSubmitId)?.retryCount ?? 0;
+      if (retryCount >= MAX_RETRIES) {
         this.updateItemStatus(
           item.clientSubmitId,
           'failed',

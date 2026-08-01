@@ -111,9 +111,9 @@ function Login() {
 
         <div className="mt-6 text-center text-sm text-gray-500">
           <p>测试账号：</p>
-          <p className="mt-1">管理员: admin / admin123</p>
-          <p>调度员: dispatcher / dispatcher123</p>
-          <p>司机: driver / driver123</p>
+          <p className="mt-1">管理员: admin / 123456</p>
+          <p>调度员: dispatcher / 123456</p>
+          <p>司机: driver1 / 123456</p>
         </div>
       </div>
     </div>

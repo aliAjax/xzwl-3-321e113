@@ -20,7 +20,6 @@ import type {
   TemperatureRecordColumnMapping,
 } from '../shared/types';
 
-let testDb: DatabaseType;
 let passed = 0;
 let failed = 0;
 const failures: string[] = [];
@@ -338,7 +337,7 @@ console.log('温度记录导入服务层测试');
 console.log('========================================');
 
 console.log('\n[初始化] 创建内存数据库...');
-testDb = initTestDatabase();
+const testDb = initTestDatabase();
 patchRepositories(testDb);
 console.log('✓ 内存数据库初始化完成');
 

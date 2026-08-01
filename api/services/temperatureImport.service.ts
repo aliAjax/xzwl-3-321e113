@@ -125,7 +125,7 @@ function parseCsvText(csvText: string, mapping?: TemperatureRecordColumnMapping)
   const headerLine = lines[0];
   const headers = headerLine.split(separator).map(h => h.trim().toLowerCase());
 
-  let columnMap: Record<string, number> = {};
+  const columnMap: Record<string, number> = {};
 
   if (mapping) {
     if (mapping.orderNo !== null) columnMap.orderNo = mapping.orderNo;
@@ -327,7 +327,6 @@ function analyzeSuggestedCorrections(parsed: TemperatureRecordParsed, failureRea
 function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValidationResult {
   const failureReasons: string[] = [];
   let status: TemperatureRecordStatus = 'unmatched';
-  let matched: TemperatureRecordValidationResult['matched'] | undefined;
 
   if (!parsed.orderNo) {
     failureReasons.push('订单号不能为空');
@@ -366,7 +365,7 @@ function validateRecord(parsed: TemperatureRecordParsed): TemperatureRecordValid
   }
 
   const { order, task, node } = matchResult.matched;
-  matched = {
+  const matched = {
     orderId: order.id,
     orderNo: order.orderNo,
     order,
