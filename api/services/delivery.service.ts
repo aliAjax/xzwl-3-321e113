@@ -255,6 +255,12 @@ export const deliveryService = {
           }
         }
 
+        // 状态传播（任务/订单）也纳入同一事务：若传播抛错则整体回滚，
+        // 不会留下“节点已完成、证据已写、但任务/订单仍为旧状态”的跨表不一致。
+        if (written) {
+          this.updateOrderStatusFromNode(node.taskId, node.nodeType, written.status);
+        }
+
         return written;
       });
     } catch (error) {
@@ -283,10 +289,6 @@ export const deliveryService = {
         };
       }
       throw error;
-    }
-
-    if (updatedNode) {
-      this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
     }
 
     return {

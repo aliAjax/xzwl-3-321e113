@@ -419,6 +419,21 @@ function previewImport(csvText: string, mapping?: TemperatureRecordColumnMapping
   };
 }
 
+/**
+ * 将 parsed.recordedAt 归一化为 ISO 字符串。
+ * 服务层的 TemperatureRecordParsed.recordedAt 声明为 Date，但页面预览结果经 JSON
+ * 往返后会变成字符串（Date 无法序列化）。这里同时兼容 Date、字符串、时间戳，
+ * 避免在真实 HTTP 调用链上直接对字符串调用 .toISOString() 而抛错。
+ * 返回 null 表示无法解析成有效时间。
+ */
+function toIsoString(value: Date | string | number | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 function executeImport(
   records: TemperatureRecordValidationResult[],
   operator: User
@@ -470,12 +485,27 @@ function executeImport(
       const isAbnormal = record.status === 'abnormal';
       const exceptionDesc = isAbnormal ? record.failureReasons.join('; ') : undefined;
 
+      // 兼容 JSON 往返后 recordedAt 变成字符串的情况，避免直接 .toISOString() 抛错。
+      const recordedAtIso = toIsoString(parsed.recordedAt);
+      if (!recordedAtIso) {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          message: '记录时间格式无效',
+        });
+        failedCount++;
+        continue;
+      }
+
       const outcome = temperatureEvidenceRepository.runInTransaction((): { exceptionId?: string } => {
         nodeRepository.completeNode(node.id, {
           locationText: parsed.locationText,
           temperature: parsed.temperature!,
           exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
+          recordedAt: recordedAtIso,
         });
 
         deliveryService.updateOrderStatusFromNode(
@@ -492,7 +522,7 @@ function executeImport(
           nodeId: node.id,
           nodeType: node.nodeType,
           temperature: parsed.temperature!,
-          observedAt: parsed.recordedAt!.toISOString(),
+          observedAt: recordedAtIso,
           locationText: parsed.locationText,
           operatorName: parsed.operatorName,
           exceptionDescription: exceptionDesc,
