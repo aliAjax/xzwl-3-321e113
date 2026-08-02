@@ -2,6 +2,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
+import { temperatureEvidenceService } from './temperatureEvidence.service';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -228,6 +229,25 @@ export const deliveryService = {
 
     if (updatedNode) {
       this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
+
+      // 现有司机上报链路同步写入温度证据账本：
+      // 更新 delivery_nodes 的同时向 temperature_evidence 追加一条证据。
+      if (request.temperature !== undefined && request.temperature !== null) {
+        const task = taskRepository.findById(node.taskId);
+        if (task) {
+          temperatureEvidenceService.recordNodeEvidence({
+            source: 'driver_offline',
+            orderId: task.orderId,
+            taskId: task.id,
+            nodeId: updatedNode.id,
+            nodeType: updatedNode.nodeType,
+            temperature: request.temperature,
+            observedAt: updatedNode.recordedAt || new Date().toISOString(),
+            locationText: request.locationText,
+            operatorName: operator.name,
+          });
+        }
+      }
     }
 
     return {

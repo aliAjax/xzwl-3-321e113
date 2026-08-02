@@ -5,3 +5,4 @@ export * as V004 from './V004__add_optimistic_lock.js';
 export * as V005 from './V005__exception_workorder.js';
 export * as V006 from './V006__add_sla_deadline.js';
 export * as V007 from './V007__temperature_evidence_ledger.js';
+export * as V008 from './V008__temperature_evidence_append_only.js';

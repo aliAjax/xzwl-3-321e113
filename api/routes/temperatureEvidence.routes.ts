@@ -7,8 +7,11 @@ const router = Router();
 
 router.use(authMiddleware);
 
-// 司机离线上报与历史回填：司机可提交离线数据，管理员/调度员可回填。
-router.post('/ingest', requireRoles('admin', 'dispatcher', 'driver'), temperatureEvidenceController.ingest);
+// 司机离线上报：来源在服务端强制为 driver_offline，司机无法伪造其他来源。
+router.post('/driver-offline', requireRoles('driver', 'admin', 'dispatcher'), temperatureEvidenceController.ingestDriverOffline);
+
+// 通用入口（CSV 导入 / 历史回填）：仅管理员/调度员，且拒绝 driver_offline 来源。
+router.post('/ingest', requireRoles('admin', 'dispatcher'), temperatureEvidenceController.ingest);
 
 // CSV 导入：仅管理员/调度员。
 router.post('/ingest-csv', requireRoles('admin', 'dispatcher'), temperatureEvidenceController.ingestCsv);

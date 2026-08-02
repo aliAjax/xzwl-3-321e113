@@ -3,6 +3,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import { temperatureEvidenceService } from './temperatureEvidence.service';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -17,6 +18,7 @@ import type {
   DeliveryTask,
   TemperatureRecordColumnMapping,
   TemperatureRecordColumnParseResult,
+  TemperatureRecordFieldKey,
 } from '../../shared/types';
 
 function generateId(): string {
@@ -47,7 +49,7 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-const columnHeaderMatchers: Record<string, string[]> = {
+const columnHeaderMatchers: Record<TemperatureRecordFieldKey, string[]> = {
   orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
   nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
   recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
@@ -73,11 +75,13 @@ function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
 
   const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
 
-  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+  const fieldKeys = Object.keys(columnHeaderMatchers) as TemperatureRecordFieldKey[];
+  for (const field of fieldKeys) {
+    const patterns = columnHeaderMatchers[field];
     for (let i = 0; i < normalizedHeaders.length; i++) {
       const header = normalizedHeaders[i];
       if (patterns.some(pattern => header.includes(pattern))) {
-        (mapping as any)[field] = i;
+        mapping[field] = i;
         break;
       }
     }
@@ -471,6 +475,19 @@ function executeImport(
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
 
+        // 同步写入温度证据账本（CSV 导入来源）。
+        temperatureEvidenceService.recordNodeEvidence({
+          source: 'csv_import',
+          orderId: order.id,
+          taskId: task.id,
+          nodeId: node.id,
+          nodeType: node.nodeType,
+          temperature: parsed.temperature!,
+          observedAt: parsed.recordedAt!.toISOString(),
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName,
+        });
+
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -504,6 +521,20 @@ function executeImport(
           exceptionDescription: exceptionDesc,
           exceptionTime: parsed.recordedAt!.toISOString(),
           handlingStatus: 'pending',
+        });
+
+        // 同步写入温度证据账本（CSV 导入来源，异常证据）。
+        // 工单已在上方创建，账本仅追加证据并关联既有工单。
+        temperatureEvidenceService.recordNodeEvidence({
+          source: 'csv_import',
+          orderId: order.id,
+          taskId: task.id,
+          nodeId: node.id,
+          nodeType: node.nodeType,
+          temperature: parsed.temperature!,
+          observedAt: parsed.recordedAt!.toISOString(),
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName,
         });
 
         results.push({

@@ -54,6 +54,16 @@ class TemperatureEvidenceRepository extends BaseRepository<TemperatureEvidence> 
   append(evidence: Omit<TemperatureEvidence, 'createdAt'> & { createdAt?: string }): TemperatureEvidence {
     return this.create(evidence);
   }
+
+  // 只追加、不覆盖：显式禁用继承自 BaseRepository 的 update / delete。
+  // 数据库层另有触发器兜底（见 V007 迁移）。
+  update(): TemperatureEvidence | undefined {
+    throw new Error('temperature_evidence 为只追加账本，禁止更新');
+  }
+
+  delete(): boolean {
+    throw new Error('temperature_evidence 为只追加账本，禁止删除');
+  }
 }
 
 export const temperatureEvidenceRepository = new TemperatureEvidenceRepository();

@@ -13,13 +13,39 @@ function isValidSource(value: unknown): value is TemperatureEvidenceSource {
 }
 
 export const temperatureEvidenceController = {
-  // 承接司机离线上报与历史回填（source 显式指定）。
+  // 司机离线上报：来源强制为 driver_offline，忽略请求体中的 source 声明。
+  async ingestDriverOffline(req: Request, res: Response): Promise<Response> {
+    try {
+      const body = req.body as TemperatureEvidenceIngestRequest;
+
+      if (!Array.isArray(body.items) || body.items.length === 0) {
+        return res.status(400).json({ message: 'items 不能为空' });
+      }
+
+      const result = temperatureEvidenceService.ingest({
+        batchId: body.batchId,
+        source: 'driver_offline',
+        items: body.items,
+      });
+
+      const statusCode = result.hasConflict ? 409 : 200;
+      return res.status(statusCode).json(result);
+    } catch (error) {
+      return res.status(500).json({ message: '司机离线温度证据写入失败', error: (error as Error).message });
+    }
+  },
+
+  // 通用入口：仅承接 CSV 导入 / 历史回填，拒绝伪造 driver_offline 来源。
   async ingest(req: Request, res: Response): Promise<Response> {
     try {
       const body = req.body as TemperatureEvidenceIngestRequest;
 
       if (!isValidSource(body.source)) {
-        return res.status(400).json({ message: 'source 无效，应为 driver_offline / csv_import / historical_backfill' });
+        return res.status(400).json({ message: 'source 无效，应为 csv_import / historical_backfill' });
+      }
+
+      if (body.source === 'driver_offline') {
+        return res.status(403).json({ message: '司机离线来源请使用 /driver-offline 入口，通用入口不接受该来源' });
       }
 
       if (!Array.isArray(body.items) || body.items.length === 0) {

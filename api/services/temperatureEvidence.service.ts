@@ -3,6 +3,7 @@ import { orderRepository } from '../repositories/order.repository';
 import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { temperatureEvidenceRepository } from '../repositories/temperatureEvidence.repository';
+import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { temperatureImportService } from './temperatureImport.service';
 import {
   celsiusToCenti,
@@ -70,8 +71,9 @@ function normalizeObservedAt(raw: string, source: TemperatureEvidenceSource): No
 
 /**
  * 计算标准化载荷的内容指纹（Node 内置 crypto）。
- * 指纹覆盖标准化后的关键值：来源、温度整数、observedAt(UTC)、关联节点与原始载荷。
- * 相同 readingKey 且指纹相同视为幂等；指纹不同则冲突。
+ * 指纹只覆盖标准化后的关键值：来源、温度整数、observedAt(归一化 UTC)、关联节点。
+ * 不包含保留原始文本的 rawPayload，避免同一采集时刻因原始时区写法不同（如
+ * 2026-08-02T10:00:00+08:00 与 2026-08-02T02:00:00Z）被误判为冲突。
  */
 function computeContentHash(input: {
   source: TemperatureEvidenceSource;
@@ -80,7 +82,6 @@ function computeContentHash(input: {
   orderId?: string;
   nodeId?: string;
   nodeType?: NodeType;
-  rawPayload: TemperatureEvidenceRawPayload;
 }): string {
   const canonical = JSON.stringify({
     source: input.source,
@@ -89,16 +90,8 @@ function computeContentHash(input: {
     orderId: input.orderId ?? null,
     nodeId: input.nodeId ?? null,
     nodeType: input.nodeType ?? null,
-    rawPayload: canonicalizePayload(input.rawPayload),
   });
   return createHash('sha256').update(canonical).digest('hex');
-}
-
-// 对原始载荷按键排序，保证指纹稳定。
-function canonicalizePayload(payload: TemperatureEvidenceRawPayload): Array<[string, string | number | boolean | null]> {
-  return Object.keys(payload)
-    .sort()
-    .map((key): [string, string | number | boolean | null] => [key, payload[key]]);
 }
 
 interface ResolvedContext {
@@ -171,6 +164,60 @@ function buildRawPayload(
   return payload;
 }
 
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * 让异常证据进入工单判定。
+ * - 该节点尚无工单时创建一条 pending 工单（异常证据触发）。
+ * - 已存在工单时只追加处理记录，不修改/关闭已有工单，
+ *   保证较新的正常温度或后续异常都不会掩盖或自动关闭旧异常。
+ */
+function ensureExceptionWorkorder(
+  evidence: TemperatureEvidence,
+  node: DeliveryNode,
+  order: Order
+): void {
+  const task = taskRepository.findById(node.taskId);
+  if (!task) return;
+
+  const description = `温度证据异常：${centiToCelsius(evidence.temperatureCenti)}°C 超出要求 ${order.minTemp}~${order.maxTemp}°C（来源：${evidence.source}，readingKey：${evidence.readingKey}）`;
+
+  const existing = exceptionHandlingRepository.findByNodeId(node.id);
+  if (existing) {
+    // 只追加：记录该异常证据，不覆盖既有工单状态。
+    exceptionHandlingRepository.addProcessingNote(
+      existing.id,
+      description,
+      'add_note',
+      undefined,
+      '系统（温度证据账本）'
+    );
+    return;
+  }
+
+  const handling = exceptionHandlingRepository.createHandling({
+    id: generateId(),
+    nodeId: node.id,
+    taskId: node.taskId,
+    orderId: order.id,
+    driverId: task.driverId,
+    temperatureZone: order.temperatureZone,
+    exceptionDescription: description,
+    exceptionTime: evidence.observedAt,
+    handlingStatus: 'pending',
+  });
+
+  exceptionHandlingRepository.addProcessingNote(
+    handling.id,
+    description,
+    'create',
+    undefined,
+    '系统（温度证据账本）'
+  );
+}
+
 /**
  * 承接一批温度证据（司机离线 / CSV 导入 / 历史回填共用）。
  * 只追加不覆盖；幂等成功、冲突返回 409 语义，禁止强制覆盖。
@@ -223,7 +270,6 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
       orderId: context.order?.id,
       nodeId: context.node?.id,
       nodeType: context.nodeType,
-      rawPayload,
     });
 
     const existing = temperatureEvidenceRepository.findByReadingKey(readingKey);
@@ -280,6 +326,12 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
       isAbnormal,
       message: isAbnormal ? '已记录（温度异常）' : '已记录',
     });
+
+    // 每条异常证据都参与工单判定：为异常证据创建/关联异常工单。
+    // 只追加不覆盖——较新的正常温度不会关闭已存在的工单。
+    if (isAbnormal && context.node && context.order) {
+      ensureExceptionWorkorder(evidence, context.node, context.order);
+    }
   }
 
   return {
@@ -293,6 +345,43 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
     hasConflict: conflictCount > 0,
     outcomes,
   };
+}
+
+/**
+ * 供现有入口（司机节点上报 / CSV 导入执行）复用的单条证据登记。
+ * 现有页面调用链在更新 delivery_nodes 的同时，同步向账本追加一条证据，
+ * 使真实请求也能落入 temperature_evidence 并进入工单判定。
+ */
+function recordNodeEvidence(params: {
+  source: TemperatureEvidenceSource;
+  orderId: string;
+  taskId: string;
+  nodeId: string;
+  nodeType: NodeType;
+  temperature: number;
+  observedAt: string;
+  batchId?: string;
+  locationText?: string;
+  operatorName?: string;
+}): void {
+  ingest({
+    batchId: params.batchId,
+    source: params.source,
+    items: [
+      {
+        // readingKey 以节点+采集时刻构造，保证同一节点重复同步幂等。
+        readingKey: `${params.source}:node:${params.nodeId}:${params.observedAt}`,
+        observedAt: params.observedAt,
+        temperature: params.temperature,
+        orderId: params.orderId,
+        taskId: params.taskId,
+        nodeId: params.nodeId,
+        nodeType: params.nodeType,
+        locationText: params.locationText,
+        operatorName: params.operatorName,
+      },
+    ],
+  });
 }
 
 const nodeTypeMap: Record<string, NodeType> = {
@@ -436,6 +525,7 @@ function readPayloadString(evidence: TemperatureEvidence, key: string): string |
 export const temperatureEvidenceService = {
   ingest,
   ingestCsv,
+  recordNodeEvidence,
   getTimeline,
   normalizeObservedAt,
   computeContentHash,
