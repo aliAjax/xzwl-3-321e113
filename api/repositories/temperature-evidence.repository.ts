@@ -1,5 +1,6 @@
 import db from '../db';
 import { v4 as uuidv4 } from 'uuid';
+import type { Database } from 'better-sqlite3';
 import type { TemperatureEvidence, TemperatureEvidenceSource } from '../../shared/types';
 
 interface TemperatureEvidenceRow {
@@ -54,13 +55,15 @@ function mapRow(row: TemperatureEvidenceRow): TemperatureEvidence {
 /**
  * 温度证据账本仓库：只追加、不覆盖。
  * 刻意不提供 update/delete 方法，保证证据不可变、可审计。
+ * db 为实例字段，与其他仓库一致，便于测试注入内存数据库。
  */
 class TemperatureEvidenceRepository {
   private readonly tableName = 'temperature_evidence';
+  private db: Database = db;
 
   append(data: TemperatureEvidenceAppendData): TemperatureEvidence {
     const id = uuidv4();
-    db
+    this.db
       .prepare(
         `INSERT INTO ${this.tableName}
           (id, batch_id, source, reading_key, node_id, raw_payload, payload_hash,
@@ -88,28 +91,28 @@ class TemperatureEvidenceRepository {
   }
 
   findById(id: string): TemperatureEvidence | undefined {
-    const row = db
+    const row = this.db
       .prepare(`SELECT * FROM ${this.tableName} WHERE id = ?`)
       .get(id) as TemperatureEvidenceRow | undefined;
     return row ? mapRow(row) : undefined;
   }
 
   findByReadingKey(readingKey: string): TemperatureEvidence | undefined {
-    const row = db
+    const row = this.db
       .prepare(`SELECT * FROM ${this.tableName} WHERE reading_key = ? LIMIT 1`)
       .get(readingKey) as TemperatureEvidenceRow | undefined;
     return row ? mapRow(row) : undefined;
   }
 
   findByNodeId(nodeId: string): TemperatureEvidence[] {
-    const rows = db
+    const rows = this.db
       .prepare(`SELECT * FROM ${this.tableName} WHERE node_id = ?`)
       .all(nodeId) as TemperatureEvidenceRow[];
     return rows.map(mapRow);
   }
 
   findByBatchId(batchId: string): TemperatureEvidence[] {
-    const rows = db
+    const rows = this.db
       .prepare(`SELECT * FROM ${this.tableName} WHERE batch_id = ?`)
       .all(batchId) as TemperatureEvidenceRow[];
     return rows.map(mapRow);

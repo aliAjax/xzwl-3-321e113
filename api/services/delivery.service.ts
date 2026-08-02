@@ -3,7 +3,6 @@ import { nodeRepository } from '../repositories/node.repository';
 import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
 import { temperatureEvidenceService } from './temperatureEvidence.service';
-import db from '../db';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -210,7 +209,8 @@ export const deliveryService = {
     // 节点完成与温度证据落账在同一事务中提交：
     // 落账失败（如司机数据缺少时区、readingKey 冲突）即业务失败，
     // 节点写入一并回滚，不得出现“节点成功但证据缺失”的假成功。
-    const completeWithEvidence = db.transaction(() => {
+    // 事务经由 nodeRepository 当前连接执行，保证与仓库使用同一数据库。
+    const updatedNode = nodeRepository.transaction(() => {
       const completedNode = nodeRepository.completeNode(nodeId, {
         locationText: request.locationText,
         temperature: request.temperature,
@@ -245,8 +245,6 @@ export const deliveryService = {
 
       return completedNode;
     });
-
-    const updatedNode = completeWithEvidence();
 
     if (request.version !== undefined && !updatedNode) {
       const currentNode = nodeRepository.findById(nodeId);

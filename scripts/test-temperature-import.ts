@@ -10,8 +10,10 @@ import { nodeRepository } from '../api/repositories/node.repository';
 import { exceptionHandlingRepository } from '../api/repositories/exception.repository';
 import { processingNoteRepository } from '../api/repositories/processing-notes.repository';
 import { customerRepository } from '../api/repositories/customer.repository';
+import { temperatureEvidenceRepository } from '../api/repositories/temperature-evidence.repository';
 import { temperatureImportService } from '../api/services/temperatureImport.service';
 import { deliveryService } from '../api/services/delivery.service';
+import * as V007 from './migrations/V007__temperature_evidence_ledger';
 import type {
   Order,
   DeliveryTask,
@@ -185,6 +187,9 @@ function initTestDatabase(): DatabaseType {
 
   migrations.forEach(sql => db.exec(sql));
 
+  // 温度证据账本表：与生产迁移保持一致，直接复用 V007
+  V007.up(db);
+
   return db;
 }
 
@@ -196,6 +201,7 @@ function patchRepositories(db: DatabaseType): void {
   (exceptionHandlingRepository as any).db = db;
   (processingNoteRepository as any).db = db;
   (customerRepository as any).db = db;
+  (temperatureEvidenceRepository as any).db = db;
 }
 
 function createTestUser(): User {
@@ -309,6 +315,7 @@ function setupFullTestData(): {
   user: User; order: Order; task: DeliveryTask; nodes: DeliveryNode[] } {
   testDb.exec('DELETE FROM exception_processing_notes');
   testDb.exec('DELETE FROM exception_handlings');
+  testDb.exec('DELETE FROM temperature_evidence');
   testDb.exec('DELETE FROM delivery_nodes');
   testDb.exec('DELETE FROM delivery_tasks');
   testDb.exec('DELETE FROM loading_batches');

@@ -4,7 +4,6 @@ import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
 import { temperatureEvidenceService } from './temperatureEvidence.service';
-import db from '../db';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -493,8 +492,9 @@ function executeImport(
 
     try {
       if (record.status === 'importable') {
-        // 节点完成、状态推进与证据落账同事务：落账失败整体回滚，计为导入失败
-        const commitRecord = db.transaction(() => {
+        // 节点完成、状态推进与证据落账同事务：落账失败整体回滚，计为导入失败。
+        // 事务经由 nodeRepository 当前连接执行，保证与仓库使用同一数据库。
+        nodeRepository.transaction(() => {
           nodeRepository.completeNode(node.id, {
             locationText: parsed.locationText,
             temperature: parsed.temperature!,
@@ -504,7 +504,6 @@ function executeImport(
           deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
           appendCsvEvidence();
         });
-        commitRecord();
 
         results.push({
           lineNumber: record.lineNumber,
@@ -521,7 +520,7 @@ function executeImport(
         const exceptionId = generateId();
 
         // 节点完成、异常工单与证据落账同事务：任一步骤失败整体回滚，计为导入失败
-        const commitRecord = db.transaction(() => {
+        nodeRepository.transaction(() => {
           nodeRepository.completeNode(node.id, {
             locationText: parsed.locationText,
             temperature: parsed.temperature!,
@@ -544,7 +543,6 @@ function executeImport(
             handlingStatus: 'pending',
           });
         });
-        commitRecord();
 
         results.push({
           lineNumber: record.lineNumber,
