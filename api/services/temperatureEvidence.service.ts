@@ -299,27 +299,19 @@ function getBatchEvidence(batchId: string): TemperatureEvidenceView[] {
 }
 
 /**
- * 供现有 CSV 导入 / 司机节点更新入口集成的安全写入：
- * 账本写入失败（如 readingKey 冲突、节点不存在）只记录日志，
- * 不影响既有业务流程与页面行为。
+ * 严格写入：供现有 CSV 导入 / 司机节点更新入口在事务中调用。
+ * 落账失败（缺少时区、readingKey 冲突、节点不存在等）直接抛错，
+ * 调用方必须将其视为业务失败并回滚，不得静默吞错。
  */
-function appendEvidenceSafely(
+function appendEvidenceStrict(
   request: TemperatureEvidenceAppendRequest
-): TemperatureEvidenceAppendResult | null {
-  try {
-    return appendNormalizedEvidence(request);
-  } catch (error) {
-    console.error(
-      `[温度证据账本] 写入失败 readingKey=${request.readingKey}:`,
-      error instanceof Error ? error.message : error
-    );
-    return null;
-  }
+): TemperatureEvidenceAppendResult {
+  return appendNormalizedEvidence(request);
 }
 
 export const temperatureEvidenceService = {
   appendEvidence,
-  appendEvidenceSafely,
+  appendEvidenceStrict,
   getNodeTimeline,
   getBatchEvidence,
 };

@@ -3,6 +3,7 @@ import { nodeRepository } from '../repositories/node.repository';
 import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
 import { temperatureEvidenceService } from './temperatureEvidence.service';
+import db from '../db';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -206,13 +207,46 @@ export const deliveryService = {
       };
     }
 
-    const updatedNode = nodeRepository.completeNode(nodeId, {
-      locationText: request.locationText,
-      temperature: request.temperature,
-      exceptionDescription: request.exceptionDescription,
-      clientSubmitId: request.clientSubmitId,
-      version: request.version,
+    // 节点完成与温度证据落账在同一事务中提交：
+    // 落账失败（如司机数据缺少时区、readingKey 冲突）即业务失败，
+    // 节点写入一并回滚，不得出现“节点成功但证据缺失”的假成功。
+    const completeWithEvidence = db.transaction(() => {
+      const completedNode = nodeRepository.completeNode(nodeId, {
+        locationText: request.locationText,
+        temperature: request.temperature,
+        exceptionDescription: request.exceptionDescription,
+        clientSubmitId: request.clientSubmitId,
+        version: request.version,
+      });
+
+      if (completedNode) {
+        this.updateOrderStatusFromNode(node.taskId, node.nodeType, completedNode.status);
+
+        if (request.temperature !== undefined) {
+          const submitKey = request.clientSubmitId ?? generateId();
+          temperatureEvidenceService.appendEvidenceStrict({
+            source: 'driver_offline',
+            readingKey: `driver:${nodeId}:${submitKey}`,
+            nodeId,
+            batchId: `driver-sync-${submitKey}`,
+            temperature: request.temperature,
+            observedAt: request.updatedAt ?? completedNode.recordedAt ?? new Date().toISOString(),
+            rawPayload: {
+              status: request.status,
+              locationText: request.locationText,
+              exceptionDescription: request.exceptionDescription,
+              temperature: request.temperature,
+              clientSubmitId: request.clientSubmitId,
+              updatedAt: request.updatedAt,
+            },
+          });
+        }
+      }
+
+      return completedNode;
     });
+
+    const updatedNode = completeWithEvidence();
 
     if (request.version !== undefined && !updatedNode) {
       const currentNode = nodeRepository.findById(nodeId);
@@ -225,32 +259,6 @@ export const deliveryService = {
           submittedData: request,
         },
       };
-    }
-
-    if (updatedNode) {
-      this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
-
-      // 温度证据账本：司机入口（含离线上报同步）携带温度时同步追加证据。
-      // 只追加、失败不阻断既有节点流程。
-      if (request.temperature !== undefined) {
-        const submitKey = request.clientSubmitId ?? generateId();
-        temperatureEvidenceService.appendEvidenceSafely({
-          source: 'driver_offline',
-          readingKey: `driver:${nodeId}:${submitKey}`,
-          nodeId,
-          batchId: `driver-sync-${submitKey}`,
-          temperature: request.temperature,
-          observedAt: request.updatedAt ?? updatedNode.recordedAt ?? new Date().toISOString(),
-          rawPayload: {
-            status: request.status,
-            locationText: request.locationText,
-            exceptionDescription: request.exceptionDescription,
-            temperature: request.temperature,
-            clientSubmitId: request.clientSubmitId,
-            updatedAt: request.updatedAt,
-          },
-        });
-      }
     }
 
     return {
