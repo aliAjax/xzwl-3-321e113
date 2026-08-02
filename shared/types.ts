@@ -1,7 +1,7 @@
 export type TemperatureZone = 'frozen' | 'chilled' | 'ambient';
 export type OrderStatus = 'created' | 'warehoused' | 'loading' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
 export type SyncStatus = 'synced' | 'syncing' | 'pending' | 'failed' | 'conflict';
-export type ConflictType = 'already_completed' | 'updated_by_other' | 'concurrent_update';
+export type ConflictType = 'already_completed' | 'updated_by_other' | 'concurrent_update' | 'evidence_conflict';
 
 export const TEMPERATURE_ZONE_RANGES: Record<TemperatureZone, { min: number; max: number; label: string }> = {
   frozen: { min: -30, max: -10, label: '冷冻' },
@@ -729,12 +729,14 @@ export interface TemperatureRecordImportResult {
   failedCount: number;
   skippedCount: number;
   exceptionCreatedCount: number;
+  conflictCount?: number;
   results: Array<{
     lineNumber: number;
     orderNo: string;
     success: boolean;
     isException: boolean;
     isSkipped: boolean;
+    isConflict?: boolean;
     nodeId?: string;
     exceptionId?: string;
     message: string;

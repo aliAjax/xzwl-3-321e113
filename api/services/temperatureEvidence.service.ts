@@ -71,7 +71,8 @@ function normalizeObservedAt(raw: string, source: TemperatureEvidenceSource): No
 
 /**
  * 计算标准化载荷的内容指纹（Node 内置 crypto）。
- * 指纹只覆盖标准化后的关键值：来源、温度整数、observedAt(归一化 UTC)、关联节点。
+ * 指纹覆盖全部最终保存的标准化关键值：来源、温度整数、observedAt(归一化 UTC)、
+ * 以及关联的 orderId / taskId / nodeId / nodeType。
  * 不包含保留原始文本的 rawPayload，避免同一采集时刻因原始时区写法不同（如
  * 2026-08-02T10:00:00+08:00 与 2026-08-02T02:00:00Z）被误判为冲突。
  */
@@ -80,6 +81,7 @@ function computeContentHash(input: {
   temperatureCenti: number;
   observedAtUtc: string;
   orderId?: string;
+  taskId?: string;
   nodeId?: string;
   nodeType?: NodeType;
 }): string {
@@ -88,6 +90,7 @@ function computeContentHash(input: {
     temperatureCenti: input.temperatureCenti,
     observedAtUtc: input.observedAtUtc,
     orderId: input.orderId ?? null,
+    taskId: input.taskId ?? null,
     nodeId: input.nodeId ?? null,
     nodeType: input.nodeType ?? null,
   });
@@ -221,8 +224,18 @@ function ensureExceptionWorkorder(
 /**
  * 承接一批温度证据（司机离线 / CSV 导入 / 历史回填共用）。
  * 只追加不覆盖；幂等成功、冲突返回 409 语义，禁止强制覆盖。
+ *
+ * manageWorkorder：
+ * - true（默认，账本自有入口 /ingest、/driver-offline）：证据与异常工单在同一事务内
+ *   创建/关联，保证一致性。
+ * - false（现有页面入口经 recordNodeEvidence 复用）：仅登记证据并返回冲突信息，
+ *   工单仍由既有链路自行创建，避免与其重复建单。
  */
-function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceIngestResult {
+function ingest(
+  request: TemperatureEvidenceIngestRequest,
+  options: { manageWorkorder?: boolean } = {}
+): TemperatureEvidenceIngestResult {
+  const manageWorkorder = options.manageWorkorder ?? true;
   const source = request.source;
   const batchId = request.batchId || `${source}-${randomUUID()}`;
   const receivedAt = new Date().toISOString();
@@ -268,6 +281,7 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
       temperatureCenti,
       observedAtUtc: normalized.utc,
       orderId: context.order?.id,
+      taskId: context.taskId,
       nodeId: context.node?.id,
       nodeType: context.nodeType,
     });
@@ -276,6 +290,13 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
     if (existing) {
       if (existing.contentHash === contentHash) {
         // 相同 readingKey 且相同标准化载荷视为幂等成功。
+        // 幂等补偿：若该异常证据此前因故障没有成功建单，则在此补建，
+        // 避免异常证据永久缺少对应工单。
+        if (manageWorkorder && existing.isAbnormal && context.node && context.order) {
+          temperatureEvidenceRepository.runInTransaction(() => {
+            ensureExceptionWorkorder(existing, context.node!, context.order!);
+          });
+        }
         duplicateCount++;
         outcomes.push({
           readingKey,
@@ -299,23 +320,35 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
 
     const { isAbnormal, minTempCenti, maxTempCenti } = evaluateAbnormal(temperatureCenti, context.order);
 
-    const evidence = temperatureEvidenceRepository.append({
-      id: randomUUID(),
-      batchId,
-      source,
-      readingKey,
-      contentHash,
-      rawPayload,
-      temperatureCenti,
-      observedAt: normalized.utc,
-      receivedAt,
-      orderId: context.order?.id,
-      taskId: context.taskId,
-      nodeId: context.node?.id,
-      nodeType: context.nodeType,
-      minTempCenti,
-      maxTempCenti,
-      isAbnormal,
+    // 一致性：证据写入与工单创建/关联在同一事务内完成。
+    // 任一失败都整体回滚，不会留下“证据存在但工单缺失”的状态。
+    const evidence = temperatureEvidenceRepository.runInTransaction(() => {
+      const appended = temperatureEvidenceRepository.append({
+        id: randomUUID(),
+        batchId,
+        source,
+        readingKey,
+        contentHash,
+        rawPayload,
+        temperatureCenti,
+        observedAt: normalized.utc,
+        receivedAt,
+        orderId: context.order?.id,
+        taskId: context.taskId,
+        nodeId: context.node?.id,
+        nodeType: context.nodeType,
+        minTempCenti,
+        maxTempCenti,
+        isAbnormal,
+      });
+
+      // 每条异常证据都参与工单判定：为异常证据创建/关联异常工单。
+      // 只追加不覆盖——较新的正常温度不会关闭已存在的工单。
+      if (manageWorkorder && isAbnormal && context.node && context.order) {
+        ensureExceptionWorkorder(appended, context.node, context.order);
+      }
+
+      return appended;
     });
 
     createdCount++;
@@ -326,12 +359,6 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
       isAbnormal,
       message: isAbnormal ? '已记录（温度异常）' : '已记录',
     });
-
-    // 每条异常证据都参与工单判定：为异常证据创建/关联异常工单。
-    // 只追加不覆盖——较新的正常温度不会关闭已存在的工单。
-    if (isAbnormal && context.node && context.order) {
-      ensureExceptionWorkorder(evidence, context.node, context.order);
-    }
   }
 
   return {
@@ -351,6 +378,7 @@ function ingest(request: TemperatureEvidenceIngestRequest): TemperatureEvidenceI
  * 供现有入口（司机节点上报 / CSV 导入执行）复用的单条证据登记。
  * 现有页面调用链在更新 delivery_nodes 的同时，同步向账本追加一条证据，
  * 使真实请求也能落入 temperature_evidence 并进入工单判定。
+ * 返回 ingest 结果，调用方据此感知冲突（不能吞掉 409）。
  */
 function recordNodeEvidence(params: {
   source: TemperatureEvidenceSource;
@@ -363,25 +391,29 @@ function recordNodeEvidence(params: {
   batchId?: string;
   locationText?: string;
   operatorName?: string;
-}): void {
-  ingest({
-    batchId: params.batchId,
-    source: params.source,
-    items: [
-      {
-        // readingKey 以节点+采集时刻构造，保证同一节点重复同步幂等。
-        readingKey: `${params.source}:node:${params.nodeId}:${params.observedAt}`,
-        observedAt: params.observedAt,
-        temperature: params.temperature,
-        orderId: params.orderId,
-        taskId: params.taskId,
-        nodeId: params.nodeId,
-        nodeType: params.nodeType,
-        locationText: params.locationText,
-        operatorName: params.operatorName,
-      },
-    ],
-  });
+}): TemperatureEvidenceIngestResult {
+  return ingest(
+    {
+      batchId: params.batchId,
+      source: params.source,
+      items: [
+        {
+          // readingKey 以节点+采集时刻构造，保证同一节点重复同步幂等。
+          readingKey: `${params.source}:node:${params.nodeId}:${params.observedAt}`,
+          observedAt: params.observedAt,
+          temperature: params.temperature,
+          orderId: params.orderId,
+          taskId: params.taskId,
+          nodeId: params.nodeId,
+          nodeType: params.nodeType,
+          locationText: params.locationText,
+          operatorName: params.operatorName,
+        },
+      ],
+    },
+    // 现有链路自行建单，账本仅登记证据并回传冲突。
+    { manageWorkorder: false }
+  );
 }
 
 const nodeTypeMap: Record<string, NodeType> = {

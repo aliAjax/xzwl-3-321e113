@@ -206,6 +206,39 @@ export const deliveryService = {
       };
     }
 
+    // 先登记温度证据账本（司机离线来源）：账本是可审计真值来源。
+    // 若同一 readingKey 已存在不同标准化载荷，返回 409 冲突，且不再更新节点，
+    // 避免旧入口吞掉账本冲突（固定记成功）。
+    const observedAt = new Date().toISOString();
+    if (request.temperature !== undefined && request.temperature !== null) {
+      const task = taskRepository.findById(node.taskId);
+      if (task) {
+        const evidenceResult = temperatureEvidenceService.recordNodeEvidence({
+          source: 'driver_offline',
+          orderId: task.orderId,
+          taskId: task.id,
+          nodeId: node.id,
+          nodeType: node.nodeType,
+          temperature: request.temperature,
+          observedAt,
+          locationText: request.locationText,
+          operatorName: operator.name,
+        });
+
+        if (evidenceResult.hasConflict) {
+          return {
+            success: false,
+            conflict: {
+              type: 'evidence_conflict',
+              message: '温度证据冲突：同一 readingKey 已存在不同载荷，拒绝覆盖',
+              currentNode: node,
+              submittedData: request,
+            },
+          };
+        }
+      }
+    }
+
     const updatedNode = nodeRepository.completeNode(nodeId, {
       locationText: request.locationText,
       temperature: request.temperature,
@@ -229,25 +262,6 @@ export const deliveryService = {
 
     if (updatedNode) {
       this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
-
-      // 现有司机上报链路同步写入温度证据账本：
-      // 更新 delivery_nodes 的同时向 temperature_evidence 追加一条证据。
-      if (request.temperature !== undefined && request.temperature !== null) {
-        const task = taskRepository.findById(node.taskId);
-        if (task) {
-          temperatureEvidenceService.recordNodeEvidence({
-            source: 'driver_offline',
-            orderId: task.orderId,
-            taskId: task.id,
-            nodeId: updatedNode.id,
-            nodeType: updatedNode.nodeType,
-            temperature: request.temperature,
-            observedAt: updatedNode.recordedAt || new Date().toISOString(),
-            locationText: request.locationText,
-            operatorName: operator.name,
-          });
-        }
-      }
     }
 
     return {

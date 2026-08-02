@@ -55,8 +55,17 @@ class TemperatureEvidenceRepository extends BaseRepository<TemperatureEvidence> 
     return this.create(evidence);
   }
 
+  /**
+   * 在单个数据库事务内执行回调。
+   * 用于保证“写入证据 + 创建/关联工单”要么全部成功、要么全部回滚，
+   * 避免证据已写入但工单缺失的不一致状态。
+   */
+  runInTransaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   // 只追加、不覆盖：显式禁用继承自 BaseRepository 的 update / delete。
-  // 数据库层另有触发器兜底（见 V007 迁移）。
+  // 数据库层另有触发器兜底（见 V008 迁移）。
   update(): TemperatureEvidence | undefined {
     throw new Error('temperature_evidence 为只追加账本，禁止更新');
   }

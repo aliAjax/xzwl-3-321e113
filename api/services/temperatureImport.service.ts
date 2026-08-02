@@ -431,6 +431,7 @@ function executeImport(
   let failedCount = 0;
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
+  let conflictCount = 0;
 
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
@@ -466,6 +467,36 @@ function executeImport(
     const { node, task, order } = matched;
 
     try {
+      // 先登记温度证据账本：账本是唯一可审计的真值来源。
+      // 若同一 readingKey 已有不同标准化载荷，返回冲突，
+      // 此时不再更新节点、不建工单，避免旧入口吞掉 409。
+      const evidenceResult = temperatureEvidenceService.recordNodeEvidence({
+        source: 'csv_import',
+        orderId: order.id,
+        taskId: task.id,
+        nodeId: node.id,
+        nodeType: node.nodeType,
+        temperature: parsed.temperature!,
+        observedAt: parsed.recordedAt!.toISOString(),
+        locationText: parsed.locationText,
+        operatorName: parsed.operatorName,
+      });
+
+      if (evidenceResult.hasConflict) {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          isConflict: true,
+          nodeId: node.id,
+          message: `温度证据冲突：同一 readingKey 已存在不同载荷，拒绝覆盖（409）`,
+        });
+        conflictCount++;
+        continue;
+      }
+
       if (record.status === 'importable') {
         nodeRepository.completeNode(node.id, {
           locationText: parsed.locationText,
@@ -474,19 +505,6 @@ function executeImport(
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
-
-        // 同步写入温度证据账本（CSV 导入来源）。
-        temperatureEvidenceService.recordNodeEvidence({
-          source: 'csv_import',
-          orderId: order.id,
-          taskId: task.id,
-          nodeId: node.id,
-          nodeType: node.nodeType,
-          temperature: parsed.temperature!,
-          observedAt: parsed.recordedAt!.toISOString(),
-          locationText: parsed.locationText,
-          operatorName: parsed.operatorName,
-        });
 
         results.push({
           lineNumber: record.lineNumber,
@@ -523,20 +541,6 @@ function executeImport(
           handlingStatus: 'pending',
         });
 
-        // 同步写入温度证据账本（CSV 导入来源，异常证据）。
-        // 工单已在上方创建，账本仅追加证据并关联既有工单。
-        temperatureEvidenceService.recordNodeEvidence({
-          source: 'csv_import',
-          orderId: order.id,
-          taskId: task.id,
-          nodeId: node.id,
-          nodeType: node.nodeType,
-          temperature: parsed.temperature!,
-          observedAt: parsed.recordedAt!.toISOString(),
-          locationText: parsed.locationText,
-          operatorName: parsed.operatorName,
-        });
-
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -568,6 +572,7 @@ function executeImport(
     failedCount,
     skippedCount,
     exceptionCreatedCount,
+    conflictCount,
     results,
   };
 }
