@@ -1,6 +1,11 @@
 import { Request, Response } from 'express';
 import { temperatureLedgerService } from '../services/temperature-ledger.service';
 import { LedgerConflictError, LedgerValidationError } from '../../shared/temperature-ledger.types';
+import {
+  serializeEvidence,
+  serializeTimeline,
+  serializeBatchResult,
+} from '../utils/evidence-serializer';
 import type {
   DriverOfflineReading,
   HistoricalBackfillReading,
@@ -189,14 +194,21 @@ export const temperatureLedgerController = {
       if (outcome.status === 'conflict') {
         return res.status(409).json({
           message: outcome.message,
-          existingEvidence: outcome.existingEvidence,
+          existingEvidence: serializeEvidence(outcome.existingEvidence),
           submittedStandardizedHash: outcome.submittedStandardizedHash,
+        });
+      }
+
+      if (outcome.status === 'concurrent_update') {
+        return res.status(409).json({
+          message: outcome.message,
+          currentNode: outcome.currentNode,
         });
       }
 
       return res.status(outcome.status === 'idempotent' ? 200 : 201).json({
         status: outcome.status,
-        evidence: outcome.evidence,
+        evidence: serializeEvidence(outcome.evidence),
         judgment: outcome.judgment,
         abnormalReasons: outcome.abnormalReasons,
       });
@@ -204,7 +216,7 @@ export const temperatureLedgerController = {
       if (error instanceof LedgerConflictError) {
         return res.status(409).json({
           message: error.message,
-          existingEvidence: error.existingEvidence,
+          existingEvidence: serializeEvidence(error.existingEvidence),
           submittedStandardizedHash: error.submittedPayloadHash,
         });
       }
@@ -222,7 +234,7 @@ export const temperatureLedgerController = {
         return res.status(400).json({ message: 'csvText 必须是非空字符串' });
       }
       const result = temperatureLedgerService.importCsv(body.csvText);
-      return res.status(200).json(result);
+      return res.status(200).json(serializeBatchResult(result));
     } catch (error) {
       if (error instanceof LedgerValidationError) {
         return res.status(400).json({ message: error.message, field: error.field });
@@ -240,7 +252,7 @@ export const temperatureLedgerController = {
       const readings = body.readings.map(toDriverOfflineReading);
       const result = temperatureLedgerService.appendDriverOffline(readings);
       const hasConflict = result.conflict > 0;
-      return res.status(hasConflict ? 409 : 200).json(result);
+      return res.status(hasConflict ? 409 : 200).json(serializeBatchResult(result));
     } catch (error) {
       if (error instanceof LedgerValidationError) {
         return res.status(400).json({ message: error.message, field: error.field });
@@ -258,7 +270,7 @@ export const temperatureLedgerController = {
       const readings = body.readings.map(toHistoricalBackfillReading);
       const result = temperatureLedgerService.appendHistoricalBackfill(readings);
       const hasConflict = result.conflict > 0;
-      return res.status(hasConflict ? 409 : 200).json(result);
+      return res.status(hasConflict ? 409 : 200).json(serializeBatchResult(result));
     } catch (error) {
       if (error instanceof LedgerValidationError) {
         return res.status(400).json({ message: error.message, field: error.field });
@@ -270,7 +282,7 @@ export const temperatureLedgerController = {
   backfillFromExistingNodes(_req: Request, res: Response): Response {
     try {
       const result = temperatureLedgerService.backfillFromExistingNodes();
-      return res.status(200).json(result);
+      return res.status(200).json(serializeBatchResult(result));
     } catch (error) {
       return res.status(500).json({
         message: '历史节点回填失败',
@@ -282,19 +294,19 @@ export const temperatureLedgerController = {
   getByNode(req: Request, res: Response): Response {
     const { nodeId } = req.params;
     const timeline = temperatureLedgerService.getTimelineByNode(nodeId);
-    return res.status(200).json(timeline);
+    return res.status(200).json(serializeTimeline(timeline));
   },
 
   getByTask(req: Request, res: Response): Response {
     const { taskId } = req.params;
     const timeline = temperatureLedgerService.getTimelineByTask(taskId);
-    return res.status(200).json(timeline);
+    return res.status(200).json(serializeTimeline(timeline));
   },
 
   getByOrder(req: Request, res: Response): Response {
     const { orderId } = req.params;
     const timeline = temperatureLedgerService.getTimelineByOrder(orderId);
-    return res.status(200).json(timeline);
+    return res.status(200).json(serializeTimeline(timeline));
   },
 
   getByReadingKey(req: Request, res: Response): Response {
@@ -303,12 +315,16 @@ export const temperatureLedgerController = {
     if (!evidence) {
       return res.status(404).json({ message: '证据不存在' });
     }
-    return res.status(200).json(evidence);
+    return res.status(200).json(serializeEvidence(evidence));
   },
 
   getByBatch(req: Request, res: Response): Response {
     const { batchId } = req.params;
     const evidence = temperatureLedgerService.getByBatchId(batchId);
-    return res.status(200).json({ batchId, items: evidence, total: evidence.length });
+    return res.status(200).json({
+      batchId,
+      items: evidence.map(serializeEvidence),
+      total: evidence.length,
+    });
   },
 };

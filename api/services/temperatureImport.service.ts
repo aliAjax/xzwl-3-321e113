@@ -25,6 +25,20 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+function toIsoString(value: Date | string | null | undefined): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+    return value.trim();
+  }
+  throw new Error('记录时间无效');
+}
+
 const nodeTypeMap: Record<string, NodeType> = {
   '入库': 'warehouse_in',
   'warehouse_in': 'warehouse_in',
@@ -464,7 +478,7 @@ function executeImport(
     const { node, task, order } = matched;
 
     try {
-      const observedAtIso = parsed.recordedAt!.toISOString();
+      const observedAtIso = toIsoString(parsed.recordedAt);
       const temperature = parsed.temperature!;
       const readingKey = `csv:${order.orderNo}:${node.nodeType}:${observedAtIso}`;
       const rawPayload: Record<string, unknown> = {

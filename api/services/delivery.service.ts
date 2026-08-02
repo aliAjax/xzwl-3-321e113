@@ -4,7 +4,6 @@ import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { temperatureLedgerService } from './temperature-ledger.service';
-import { LedgerConflictError } from '../../shared/temperature-ledger.types';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -173,9 +172,28 @@ export const deliveryService = {
       return { success: false };
     }
 
+    const task = taskRepository.findById(node.taskId);
+    const order = task ? orderRepository.findById(task.orderId) : undefined;
+
     if (request.clientSubmitId) {
       const existingNode = nodeRepository.findByClientSubmitId(request.clientSubmitId);
       if (existingNode) {
+        const readingKey = `driver:${request.clientSubmitId}`;
+        const existingEvidence = temperatureLedgerService.getByReadingKey(readingKey);
+        if (existingEvidence && request.temperature !== undefined && request.temperature !== null) {
+          const submittedCenti = Math.round(request.temperature * 100);
+          if (existingEvidence.temperatureCenti !== submittedCenti) {
+            return {
+              success: false,
+              conflict: {
+                type: 'concurrent_update',
+                message: `readingKey ${readingKey} 已存在但标准化载荷不同（温度由 ${(existingEvidence.temperatureCenti / 100).toFixed(2)}°C 改为 ${request.temperature}°C），禁止强制覆盖`,
+                currentNode: existingNode,
+                submittedData: request,
+              },
+            };
+          }
+        }
         return {
           success: true,
           node: existingNode,
@@ -184,7 +202,7 @@ export const deliveryService = {
       }
     }
 
-    if (node.status === 'completed') {
+    if (node.status === 'completed' && !exceptionHandlingRepository.findByNodeId(node.id)) {
       return {
         success: false,
         conflict: {
@@ -208,96 +226,100 @@ export const deliveryService = {
       };
     }
 
-    const updatedNode = nodeRepository.completeNode(nodeId, {
-      locationText: request.locationText,
+    const observedAt = request.updatedAt || new Date().toISOString();
+    const readingKey = request.clientSubmitId
+      ? `driver:${request.clientSubmitId}`
+      : `driver:${node.id}:${observedAt}`;
+
+    if (request.temperature === undefined || request.temperature === null) {
+      const updatedNode = nodeRepository.completeNode(nodeId, {
+        locationText: request.locationText,
+        exceptionDescription: request.exceptionDescription,
+        recordedAt: observedAt,
+        clientSubmitId: request.clientSubmitId,
+        version: request.version,
+      });
+
+      if (request.version !== undefined && !updatedNode) {
+        const currentNode = nodeRepository.findById(nodeId);
+        return {
+          success: false,
+          conflict: {
+            type: 'concurrent_update',
+            message: '检测到并发更新，请刷新后重试',
+            currentNode: currentNode || node,
+            submittedData: request,
+          },
+        };
+      }
+
+      if (updatedNode) {
+        this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
+      }
+
+      return { success: true, node: updatedNode };
+    }
+
+    const rawPayload: Record<string, unknown> = {
+      nodeId: node.id,
+      taskId: node.taskId,
+      nodeType: node.nodeType,
       temperature: request.temperature,
+      observedAt,
+      locationText: request.locationText ?? null,
+      exceptionDescription: request.exceptionDescription ?? null,
+      clientSubmitId: request.clientSubmitId ?? null,
+      operatorId: operator.id,
+      operatorName: operator.name,
+    };
+
+    const outcome = temperatureLedgerService.recordForNode({
+      source: 'driver_offline',
+      readingKey,
+      rawPayload,
+      nodeId: node.id,
+      taskId: node.taskId,
+      orderId: order?.id,
+      nodeType: node.nodeType,
+      orderNo: order?.orderNo,
+      temperatureCelsius: request.temperature,
+      observedAt,
+      locationText: request.locationText,
+      operatorName: operator.name,
       exceptionDescription: request.exceptionDescription,
       clientSubmitId: request.clientSubmitId,
       version: request.version,
     });
 
-    if (request.version !== undefined && !updatedNode) {
-      const currentNode = nodeRepository.findById(nodeId);
+    if (outcome.status === 'conflict') {
       return {
         success: false,
         conflict: {
           type: 'concurrent_update',
-          message: '检测到并发更新，请刷新后重试',
-          currentNode: currentNode || node,
+          message: outcome.message,
+          currentNode: node,
           submittedData: request,
         },
       };
     }
 
-    if (updatedNode) {
-      this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
-
-      if (request.temperature !== undefined && request.temperature !== null) {
-        try {
-          const task = taskRepository.findById(node.taskId);
-          const order = task ? orderRepository.findById(task.orderId) : undefined;
-          const clientSubmitId = request.clientSubmitId;
-          const observedAt = request.updatedAt || updatedNode.recordedAt || new Date().toISOString();
-          const readingKey = clientSubmitId
-            ? `driver:${clientSubmitId}`
-            : `driver:${node.id}:${observedAt}`;
-
-          const rawPayload: Record<string, unknown> = {
-            nodeId: node.id,
-            taskId: node.taskId,
-            nodeType: node.nodeType,
-            temperature: request.temperature,
-            observedAt,
-            locationText: request.locationText ?? null,
-            exceptionDescription: request.exceptionDescription ?? null,
-            clientSubmitId: clientSubmitId ?? null,
-            operatorId: operator.id,
-            operatorName: operator.name,
-          };
-
-          temperatureLedgerService.append(
-            {
-              source: 'driver_offline',
-              readingKey,
-              rawPayload,
-              temperatureCelsius: request.temperature,
-              observedAt,
-              nodeId: node.id,
-              taskId: node.taskId,
-              orderId: order?.id,
-              nodeType: node.nodeType,
-              orderNo: order?.orderNo,
-              locationText: request.locationText,
-              operatorName: operator.name,
-            },
-          );
-
-          if (updatedNode.status === 'exception' && task && order) {
-            const existing = exceptionHandlingRepository.findByNodeId(node.id);
-            if (!existing) {
-              exceptionHandlingRepository.createHandling({
-                nodeId: node.id,
-                taskId: task.id,
-                orderId: order.id,
-                driverId: task.driverId,
-                temperatureZone: order.temperatureZone,
-                exceptionDescription: request.exceptionDescription || '温度异常',
-                exceptionTime: observedAt,
-                handlingStatus: 'pending',
-              });
-            }
-          }
-        } catch (error) {
-          if (!(error instanceof LedgerConflictError)) {
-            throw error;
-          }
-        }
-      }
+    if (outcome.status === 'concurrent_update') {
+      return {
+        success: false,
+        conflict: {
+          type: 'concurrent_update',
+          message: outcome.message,
+          currentNode: outcome.currentNode as DeliveryNode,
+          submittedData: request,
+        },
+      };
     }
 
+    const updatedNode = nodeRepository.findById(nodeId);
     return {
       success: true,
       node: updatedNode,
+      isDuplicate: outcome.status === 'idempotent',
     };
   },
 

@@ -65,11 +65,13 @@ export interface NodeEvidenceInput {
   operatorName?: string;
   exceptionDescription?: string;
   clientSubmitId?: string;
+  version?: number;
 }
 
 export type NodeEvidenceOutcome =
   | { status: 'created' | 'idempotent'; evidence: TemperatureEvidence; judgment: EvidenceJudgment; abnormalReasons: string[] }
-  | { status: 'conflict'; existingEvidence: TemperatureEvidence; submittedStandardizedHash: string; message: string };
+  | { status: 'conflict'; existingEvidence: TemperatureEvidence; submittedStandardizedHash: string; message: string; conflictType: 'reading_key' }
+  | { status: 'concurrent_update'; message: string; currentNode: unknown };
 
 export interface EvidenceBatchCreateResult {
   batchId: string;

@@ -9,7 +9,6 @@ import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import {
   computeStandardizedPayloadHash,
-  buildStandardizedPayload,
 } from '../utils/fingerprint';
 import {
   celsiusToCenti,
@@ -373,17 +372,7 @@ function appendCore(
     throw new LedgerConflictError(existing, standardizedHash);
   }
 
-  const rawPayloadString = JSON.stringify(buildStandardizedPayload({
-    source: input.source,
-    readingKey,
-    temperatureCenti,
-    observedAt,
-    nodeId: nodeId ?? null,
-    taskId: taskId ?? null,
-    orderId: orderId ?? null,
-    nodeType: nodeType ?? null,
-    orderNo: input.orderNo ?? null,
-  }));
+  const rawPayloadString = JSON.stringify(rawPayload);
 
   const judgment = order
     ? judgeTemperature(temperatureCelsius, order)
@@ -505,13 +494,19 @@ export const temperatureLedgerService = {
     }
     const { nodeId, taskId, orderId, order } = resolved;
 
-    if (input.temperatureCelsius === undefined || input.temperatureCelsius === null) {
-      const node = nodeRepository.findById(nodeId);
-      if (node?.temperature === undefined || node.temperature === null) {
-        throw new LedgerValidationError('temperatureCelsius', '温度值不能为空');
-      }
+    const existingNode = nodeRepository.findById(nodeId);
+    if (!existingNode) {
+      throw new LedgerValidationError('nodeId', `节点不存在: ${nodeId}`);
     }
-    const temperatureCelsius = input.temperatureCelsius ?? nodeRepository.findById(nodeId)!.temperature!;
+
+    let temperatureCelsius: number;
+    if (input.temperatureCelsius !== undefined && input.temperatureCelsius !== null) {
+      temperatureCelsius = input.temperatureCelsius;
+    } else if (existingNode.temperature !== undefined && existingNode.temperature !== null) {
+      temperatureCelsius = existingNode.temperature;
+    } else {
+      throw new LedgerValidationError('temperatureCelsius', '温度值不能为空');
+    }
 
     const observedAtRaw = input.observedAt ?? new Date().toISOString();
     if (input.source === 'driver_offline') {
@@ -519,18 +514,23 @@ export const temperatureLedgerService = {
     }
     const observedAt = parseObservedAt(observedAtRaw, input.source);
 
-    const rawPayload: Record<string, unknown> = {
-      ...input.rawPayload,
+    const preJudgment = judgeTemperature(temperatureCelsius, order);
+    const effectiveExceptionDescription = input.exceptionDescription && input.exceptionDescription.trim() !== ''
+      ? input.exceptionDescription
+      : preJudgment.reasons.join('; ');
+
+    const mergedPayload: Record<string, unknown> = {
       nodeId,
       taskId,
       orderId,
-      nodeType: input.nodeType ?? nodeRepository.findById(nodeId)?.nodeType,
+      nodeType: input.nodeType ?? existingNode.nodeType,
       temperature: temperatureCelsius,
       observedAt,
-      locationText: input.locationText ?? null,
-      operatorName: input.operatorName ?? null,
-      exceptionDescription: input.exceptionDescription ?? null,
+      locationText: input.locationText ?? existingNode.locationText ?? null,
+      operatorName: input.operatorName ?? existingNode.operatorName ?? null,
+      exceptionDescription: effectiveExceptionDescription || null,
       clientSubmitId: input.clientSubmitId ?? null,
+      ...input.rawPayload,
     };
 
     let outcome: AppendCoreResult;
@@ -539,7 +539,7 @@ export const temperatureLedgerService = {
         {
           source: input.source,
           readingKey: input.readingKey,
-          rawPayload,
+          rawPayload: mergedPayload,
           temperatureCelsius,
           observedAt,
           nodeId,
@@ -556,6 +556,7 @@ export const temperatureLedgerService = {
       if (error instanceof LedgerConflictError) {
         return {
           status: 'conflict',
+          conflictType: 'reading_key',
           existingEvidence: error.existingEvidence,
           submittedStandardizedHash: error.submittedPayloadHash,
           message: error.message,
@@ -570,26 +571,30 @@ export const temperatureLedgerService = {
       return { status: 'idempotent', evidence, judgment, abnormalReasons };
     }
 
-    const node = nodeRepository.findById(nodeId);
-    if (!node) {
-      return { status: 'created', evidence, judgment, abnormalReasons };
-    }
+    const isAbnormal = judgment === 'abnormal' || effectiveExceptionDescription !== '';
+    const isAlreadyException = existingNode.status === 'exception'
+      || exceptionHandlingRepository.findByNodeId(nodeId) !== undefined;
 
-    const isAlreadyException = node.status === 'exception' || exceptionHandlingRepository.findByNodeId(nodeId) !== undefined;
-
-    if (judgment === 'abnormal' || input.exceptionDescription) {
-      const exceptionDescription = input.exceptionDescription && input.exceptionDescription.trim() !== ''
-        ? input.exceptionDescription
-        : abnormalReasons.join('; ');
-
-      nodeRepository.completeNode(nodeId, {
-        locationText: input.locationText ?? node.locationText,
+    if (isAbnormal) {
+      const updated = nodeRepository.completeNode(nodeId, {
+        locationText: input.locationText ?? existingNode.locationText,
         temperature: temperatureCelsius,
-        exceptionDescription: exceptionDescription || '温度异常',
+        exceptionDescription: effectiveExceptionDescription || '温度异常',
         recordedAt: observedAt,
+        clientSubmitId: input.clientSubmitId,
+        version: input.version,
       });
 
-      propagateNodeCompletion(taskId, node.nodeType, true);
+      if (input.version !== undefined && !updated) {
+        const currentNode = nodeRepository.findById(nodeId);
+        return {
+          status: 'concurrent_update',
+          message: '检测到并发更新，请刷新后重试',
+          currentNode: currentNode ?? existingNode,
+        };
+      }
+
+      propagateNodeCompletion(taskId, existingNode.nodeType, true);
 
       ensureExceptionWorkorder(
         nodeId,
@@ -597,7 +602,7 @@ export const temperatureLedgerService = {
         orderId,
         taskRepository.findById(taskId)?.driverId ?? '',
         order.temperatureZone,
-        exceptionDescription || '温度异常',
+        effectiveExceptionDescription || '温度异常',
         observedAt
       );
     } else {
@@ -607,12 +612,24 @@ export const temperatureLedgerService = {
           recordedAt: observedAt,
         });
       } else {
-        nodeRepository.completeNode(nodeId, {
-          locationText: input.locationText ?? node.locationText,
+        const updated = nodeRepository.completeNode(nodeId, {
+          locationText: input.locationText ?? existingNode.locationText,
           temperature: temperatureCelsius,
           recordedAt: observedAt,
+          clientSubmitId: input.clientSubmitId,
+          version: input.version,
         });
-        propagateNodeCompletion(taskId, node.nodeType, false);
+
+        if (input.version !== undefined && !updated) {
+          const currentNode = nodeRepository.findById(nodeId);
+          return {
+            status: 'concurrent_update',
+            message: '检测到并发更新，请刷新后重试',
+            currentNode: currentNode ?? existingNode,
+          };
+        }
+
+        propagateNodeCompletion(taskId, existingNode.nodeType, false);
       }
     }
 
@@ -674,6 +691,13 @@ export const temperatureLedgerService = {
             readingKey: reading.readingKey,
             status: 'conflict',
             conflictEvidence: outcome.existingEvidence,
+            message: outcome.message,
+          });
+        } else if (outcome.status === 'concurrent_update') {
+          conflict++;
+          results.push({
+            readingKey: reading.readingKey,
+            status: 'conflict',
             message: outcome.message,
           });
         } else if (outcome.status === 'idempotent') {
