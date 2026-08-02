@@ -40,7 +40,7 @@ export const temperatureImportController = {
 
   async confirmImport(req: Request, res: Response): Promise<Response> {
     try {
-      const operator = (req as any).user as User;
+      const operator = req.user as User;
       if (!operator) {
         return res.status(401).json({ message: '未授权，请先登录' });
       }

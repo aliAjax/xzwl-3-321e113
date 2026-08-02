@@ -858,6 +858,41 @@ export interface TemperatureEvidence {
   createdAt: string;
 }
 
+/**
+ * API 边界证据视图：内部整数温度 temperatureCelsiusX100 不对外暴露，
+ * 统一转换为摄氏度数值 temperature。
+ */
+export interface TemperatureEvidenceView {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  rawPayload: string;
+  payloadHash: string;
+  /** 摄氏度数值（由内部 temperatureCelsiusX100 / 100 转换） */
+  temperature: number;
+  observedAt: string;
+  receivedAt: string;
+  createdAt: string;
+}
+
+export function toTemperatureEvidenceView(evidence: TemperatureEvidence): TemperatureEvidenceView {
+  return {
+    id: evidence.id,
+    batchId: evidence.batchId,
+    source: evidence.source,
+    readingKey: evidence.readingKey,
+    nodeId: evidence.nodeId,
+    rawPayload: evidence.rawPayload,
+    payloadHash: evidence.payloadHash,
+    temperature: evidence.temperatureCelsiusX100 / 100,
+    observedAt: evidence.observedAt,
+    receivedAt: evidence.receivedAt,
+    createdAt: evidence.createdAt,
+  };
+}
+
 /** 追加证据请求体（API 边界，温度为摄氏度数值） */
 export interface TemperatureEvidenceAppendRequest {
   source: TemperatureEvidenceSource;
@@ -874,7 +909,7 @@ export type TemperatureEvidenceAppendStatus = 'appended' | 'duplicate';
 export interface TemperatureEvidenceAppendResponse {
   success: boolean;
   status: TemperatureEvidenceAppendStatus;
-  evidence: TemperatureEvidence;
+  evidence: TemperatureEvidenceView;
 }
 
 /** 相同 readingKey 但标准化载荷不同时返回 409，禁止强制覆盖 */
@@ -888,9 +923,8 @@ export interface TemperatureEvidenceConflictResponse {
 }
 
 export interface TemperatureEvidenceTimelineItem {
-  evidence: TemperatureEvidence;
-  /** API 边界转换后的摄氏度数值 */
-  temperature: number;
+  /** API 边界视图，温度为摄氏度数值，不暴露内部整数 */
+  evidence: TemperatureEvidenceView;
   minTemp: number;
   maxTemp: number;
   isAbnormal: boolean;

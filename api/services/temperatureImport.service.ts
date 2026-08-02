@@ -3,6 +3,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import { temperatureEvidenceService } from './temperatureEvidence.service';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -11,6 +12,7 @@ import type {
   TemperatureRecordImportPreview,
   TemperatureRecordImportResult,
   TemperatureRecordStatus,
+  TemperatureRecordFieldKey,
   User,
   DeliveryNode,
   Order,
@@ -47,7 +49,7 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-const columnHeaderMatchers: Record<string, string[]> = {
+const columnHeaderMatchers: Record<TemperatureRecordFieldKey, string[]> = {
   orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
   nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
   recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
@@ -73,11 +75,13 @@ function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
 
   const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
 
-  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+  const fieldKeys = Object.keys(columnHeaderMatchers) as TemperatureRecordFieldKey[];
+  for (const field of fieldKeys) {
+    const patterns = columnHeaderMatchers[field];
     for (let i = 0; i < normalizedHeaders.length; i++) {
       const header = normalizedHeaders[i];
       if (patterns.some(pattern => header.includes(pattern))) {
-        (mapping as any)[field] = i;
+        mapping[field] = i;
         break;
       }
     }
@@ -428,6 +432,9 @@ function executeImport(
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
 
+  // 本次导入对应一个证据批次，便于审计与按批查询
+  const importBatchId = `csv-import-${generateId()}`;
+
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
     results.push({
@@ -461,6 +468,28 @@ function executeImport(
 
     const { node, task, order } = matched;
 
+    // 温度证据账本：CSV 导入成功写入节点后同步追加证据（只追加，失败不阻断导入）
+    const appendCsvEvidence = (): void => {
+      temperatureEvidenceService.appendEvidenceSafely({
+        source: 'csv_import',
+        readingKey: `csv:${node.id}:${parsed.recordedAt!.toISOString()}`,
+        nodeId: node.id,
+        batchId: importBatchId,
+        temperature: parsed.temperature!,
+        observedAt: parsed.recordedAt!.toISOString(),
+        rawPayload: {
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          nodeType: node.nodeType,
+          recordedAt: parsed.recordedAt!.toISOString(),
+          temperature: parsed.temperature!,
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName,
+          importedBy: operator.username,
+        },
+      });
+    };
+
     try {
       if (record.status === 'importable') {
         nodeRepository.completeNode(node.id, {
@@ -470,6 +499,7 @@ function executeImport(
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+        appendCsvEvidence();
 
         results.push({
           lineNumber: record.lineNumber,
@@ -492,6 +522,7 @@ function executeImport(
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
+        appendCsvEvidence();
 
         const exceptionId = generateId();
         exceptionHandlingRepository.createHandling({

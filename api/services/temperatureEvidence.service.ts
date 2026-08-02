@@ -6,6 +6,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { orderRepository } from '../repositories/order.repository';
 import {
   compareTemperatureEvidenceForTimeline,
+  toTemperatureEvidenceView,
   TEMPERATURE_EVIDENCE_SOURCES,
 } from '../../shared/types';
 import type {
@@ -16,6 +17,7 @@ import type {
   TemperatureEvidenceSource,
   TemperatureEvidenceTimeline,
   TemperatureEvidenceTimelineItem,
+  TemperatureEvidenceView,
 } from '../../shared/types';
 
 /** 旧数据（CSV 导入、历史回填）缺少时区时按 +08:00 解析 */
@@ -166,7 +168,10 @@ export interface TemperatureEvidenceAppendResult {
 
 function appendEvidence(body: unknown): TemperatureEvidenceAppendResult {
   const request = narrowAppendRequest(body);
+  return appendNormalizedEvidence(request);
+}
 
+function appendNormalizedEvidence(request: TemperatureEvidenceAppendRequest): TemperatureEvidenceAppendResult {
   const node = nodeRepository.findById(request.nodeId);
   if (!node) {
     throw new TemperatureEvidenceError(`关联节点不存在: ${request.nodeId}`, 404);
@@ -267,8 +272,7 @@ function getNodeTimeline(nodeId: string): TemperatureEvidenceTimeline {
   const items: TemperatureEvidenceTimelineItem[] = evidences.map(evidence => {
     const temperature = evidence.temperatureCelsiusX100 / 100;
     return {
-      evidence,
-      temperature,
+      evidence: toTemperatureEvidenceView(evidence),
       minTemp,
       maxTemp,
       isAbnormal: temperature < minTemp || temperature > maxTemp,
@@ -287,14 +291,35 @@ function getNodeTimeline(nodeId: string): TemperatureEvidenceTimeline {
   };
 }
 
-function getBatchEvidence(batchId: string): TemperatureEvidence[] {
+function getBatchEvidence(batchId: string): TemperatureEvidenceView[] {
   return temperatureEvidenceRepository
     .findByBatchId(batchId)
-    .sort(compareTemperatureEvidenceForTimeline);
+    .sort(compareTemperatureEvidenceForTimeline)
+    .map(toTemperatureEvidenceView);
+}
+
+/**
+ * 供现有 CSV 导入 / 司机节点更新入口集成的安全写入：
+ * 账本写入失败（如 readingKey 冲突、节点不存在）只记录日志，
+ * 不影响既有业务流程与页面行为。
+ */
+function appendEvidenceSafely(
+  request: TemperatureEvidenceAppendRequest
+): TemperatureEvidenceAppendResult | null {
+  try {
+    return appendNormalizedEvidence(request);
+  } catch (error) {
+    console.error(
+      `[温度证据账本] 写入失败 readingKey=${request.readingKey}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
 }
 
 export const temperatureEvidenceService = {
   appendEvidence,
+  appendEvidenceSafely,
   getNodeTimeline,
   getBatchEvidence,
 };

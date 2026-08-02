@@ -3,9 +3,10 @@ import {
   temperatureEvidenceService,
   TemperatureEvidenceError,
 } from '../services/temperatureEvidence.service';
-import type {
-  TemperatureEvidenceAppendResponse,
-  TemperatureEvidenceConflictResponse,
+import {
+  toTemperatureEvidenceView,
+  type TemperatureEvidenceAppendResponse,
+  type TemperatureEvidenceConflictResponse,
 } from '../../shared/types';
 
 function handleServiceError(error: unknown, res: Response): Response {
@@ -39,7 +40,7 @@ export const temperatureEvidenceController = {
       const body: TemperatureEvidenceAppendResponse = {
         success: true,
         status: result.status,
-        evidence: result.evidence,
+        evidence: toTemperatureEvidenceView(result.evidence),
       };
       return res.status(result.status === 'appended' ? 201 : 200).json(body);
     } catch (error) {
