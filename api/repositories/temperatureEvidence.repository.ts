@@ -1,0 +1,59 @@
+import { BaseRepository } from './base';
+import type { TemperatureEvidence } from '../../shared/types';
+
+/**
+ * 温度证据账本仓储。
+ * 证据采用只追加、不覆盖模型：本仓储只提供插入与查询，不暴露更新/删除接口。
+ */
+class TemperatureEvidenceRepository extends BaseRepository<TemperatureEvidence> {
+  protected tableName = 'temperature_evidence';
+  protected fieldMap: Record<keyof TemperatureEvidence, string> = {
+    id: 'id',
+    batchId: 'batch_id',
+    source: 'source',
+    readingKey: 'reading_key',
+    contentHash: 'content_hash',
+    rawPayload: 'raw_payload',
+    temperatureCenti: 'temperature_centi',
+    observedAt: 'observed_at',
+    receivedAt: 'received_at',
+    orderId: 'order_id',
+    taskId: 'task_id',
+    nodeId: 'node_id',
+    nodeType: 'node_type',
+    minTempCenti: 'min_temp_centi',
+    maxTempCenti: 'max_temp_centi',
+    isAbnormal: 'is_abnormal',
+    createdAt: 'created_at',
+  };
+  protected jsonFields: Array<keyof TemperatureEvidence> = ['rawPayload'];
+  protected booleanFields: Array<keyof TemperatureEvidence> = ['isAbnormal'];
+
+  findByReadingKey(readingKey: string): TemperatureEvidence | undefined {
+    return this.findOneByField('readingKey', readingKey);
+  }
+
+  findByOrderId(orderId: string): TemperatureEvidence[] {
+    return this.findByField('orderId', orderId, { orderBy: 'observedAt', orderDir: 'ASC' });
+  }
+
+  findByBatchId(batchId: string): TemperatureEvidence[] {
+    return this.findByField('batchId', batchId, { orderBy: 'observedAt', orderDir: 'ASC' });
+  }
+
+  countAbnormalByOrderId(orderId: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM ${this.tableName}
+         WHERE order_id = ? AND is_abnormal = 1`
+      )
+      .get(orderId) as { count: number };
+    return row.count;
+  }
+
+  append(evidence: Omit<TemperatureEvidence, 'createdAt'> & { createdAt?: string }): TemperatureEvidence {
+    return this.create(evidence);
+  }
+}
+
+export const temperatureEvidenceRepository = new TemperatureEvidenceRepository();

@@ -813,3 +813,128 @@ export interface DispatchSandboxApplyRequest {
   routeId: string;
   scheduledDepartureTime: string;
 }
+
+// ============================================================
+// 温度证据账本（Temperature Evidence Ledger）
+// 只追加、不覆盖；同时承接 CSV 导入、司机离线上报和历史回填。
+// ============================================================
+
+export type TemperatureEvidenceSource = 'driver_offline' | 'csv_import' | 'historical_backfill';
+
+// 时间线展示优先级：同一 observedAt 时刻，依次采用司机离线、CSV导入、历史回填。
+export const TEMPERATURE_EVIDENCE_SOURCE_PRIORITY: Record<TemperatureEvidenceSource, number> = {
+  driver_offline: 1,
+  csv_import: 2,
+  historical_backfill: 3,
+};
+
+// 缺少时区时的处理策略：旧 CSV 与历史回填按 +08:00 解析，司机离线数据必须显式携带时区。
+export const TEMPERATURE_EVIDENCE_ASSUME_CST: Record<TemperatureEvidenceSource, boolean> = {
+  driver_offline: false,
+  csv_import: true,
+  historical_backfill: true,
+};
+
+// 原始载荷仅允许标量字段，避免使用 any。
+export type TemperatureEvidenceRawPayload = Record<string, string | number | boolean | null>;
+
+// 账本内温度以摄氏度乘 100 后的整数保存；API 边界再转换。
+export function celsiusToCenti(celsius: number): number {
+  return Math.round(celsius * 100);
+}
+
+export function centiToCelsius(centi: number): number {
+  return centi / 100;
+}
+
+export interface TemperatureEvidence {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  contentHash: string;
+  rawPayload: TemperatureEvidenceRawPayload;
+  temperatureCenti: number;
+  observedAt: string; // 设备采集时间，保存为 UTC
+  receivedAt: string; // 服务器接收时间，保存为 UTC
+  orderId?: string;
+  taskId?: string;
+  nodeId?: string;
+  nodeType?: NodeType;
+  minTempCenti?: number;
+  maxTempCenti?: number;
+  isAbnormal: boolean;
+  createdAt: string;
+}
+
+export interface TemperatureEvidenceIngestItem {
+  readingKey: string;
+  observedAt: string; // 可能缺少时区
+  temperature: number; // 摄氏度，API 边界值
+  orderNo?: string;
+  orderId?: string;
+  taskId?: string;
+  nodeId?: string;
+  nodeType?: NodeType;
+  locationText?: string;
+  operatorName?: string;
+  rawPayload?: TemperatureEvidenceRawPayload;
+}
+
+export interface TemperatureEvidenceIngestRequest {
+  batchId?: string;
+  source: TemperatureEvidenceSource;
+  items: TemperatureEvidenceIngestItem[];
+}
+
+export type TemperatureEvidenceIngestStatus = 'created' | 'duplicate' | 'conflict' | 'rejected';
+
+export interface TemperatureEvidenceIngestOutcome {
+  readingKey: string;
+  status: TemperatureEvidenceIngestStatus;
+  evidenceId?: string;
+  isAbnormal?: boolean;
+  message: string;
+}
+
+export interface TemperatureEvidenceIngestResult {
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  totalCount: number;
+  createdCount: number;
+  duplicateCount: number;
+  conflictCount: number;
+  rejectedCount: number;
+  hasConflict: boolean;
+  outcomes: TemperatureEvidenceIngestOutcome[];
+}
+
+export interface TemperatureEvidenceCsvIngestRequest {
+  batchId?: string;
+  csvText: string;
+  mapping?: TemperatureRecordColumnMapping;
+}
+
+export interface TemperatureEvidenceTimelineEntry {
+  id: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  temperature: number; // 摄氏度，边界转换后
+  observedAt: string; // UTC
+  receivedAt: string; // UTC
+  nodeId?: string;
+  nodeType?: NodeType;
+  isAbnormal: boolean;
+  locationText?: string;
+  operatorName?: string;
+}
+
+export interface TemperatureEvidenceTimeline {
+  orderId: string;
+  orderNo: string;
+  entries: TemperatureEvidenceTimelineEntry[];
+  totalCount: number;
+  abnormalCount: number;
+  // 较新的正常温度不能掩盖旧异常，也不能自动关闭工单。
+  hasUnresolvedAbnormal: boolean;
+}
