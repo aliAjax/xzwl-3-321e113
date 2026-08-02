@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { temperatureEvidenceRepository } from '../../repositories/temperatureEvidence.repository.js';
+import type { AppendEvidenceData } from '../../repositories/temperatureEvidence.repository.js';
 import { nodeRepository } from '../../repositories/node.repository.js';
 import { taskRepository } from '../../repositories/task.repository.js';
 import { orderRepository } from '../../repositories/order.repository.js';
@@ -14,6 +15,7 @@ import {
 } from './normalizer.js';
 import type {
   TemperatureEvidence,
+  TemperatureEvidenceItem,
   TemperatureEvidenceSource,
   TemperatureEvidenceSubmitRecord,
   TemperatureEvidenceSubmitResponse,
@@ -39,6 +41,10 @@ export interface ResolvedNodeContext {
   maxTemp: number;
 }
 
+export type PreparedSubmission =
+  | { kind: 'result'; result: TemperatureEvidenceSubmitResultItem }
+  | { kind: 'append'; data: AppendEvidenceData; readingKey: string };
+
 function resolveNodeContext(nodeId: string): ResolvedNodeContext {
   const node = nodeRepository.findById(nodeId);
   if (!node) {
@@ -61,6 +67,26 @@ function resolveNodeContext(nodeId: string): ResolvedNodeContext {
     orderId: order.id,
     minTemp: order.minTemp,
     maxTemp: order.maxTemp,
+  };
+}
+
+export function toEvidenceItem(evidence: TemperatureEvidence): TemperatureEvidenceItem {
+  return {
+    id: evidence.id,
+    batchId: evidence.batchId,
+    source: evidence.source,
+    readingKey: evidence.readingKey,
+    nodeId: evidence.nodeId,
+    taskId: evidence.taskId,
+    orderId: evidence.orderId,
+    temperatureCelsius: storageToCelsius(evidence.normalizedTempC),
+    normalizedTempC: evidence.normalizedTempC,
+    observedAt: evidence.observedAt,
+    receivedAt: evidence.receivedAt,
+    locationText: evidence.locationText,
+    operatorName: evidence.operatorName,
+    isAbnormal: evidence.isAbnormal,
+    createdAt: evidence.createdAt,
   };
 }
 
@@ -88,16 +114,19 @@ function toTimelineEntry(evidence: TemperatureEvidence): TemperatureEvidenceTime
 }
 
 class TemperatureEvidenceService {
-  submitOne(
+  prepareSubmission(
     record: TemperatureEvidenceSubmitRecord,
     options: SubmitEvidenceOptions
-  ): TemperatureEvidenceSubmitResultItem {
+  ): PreparedSubmission {
     const readingKey = record.readingKey.trim();
     if (!readingKey) {
       return {
-        readingKey: record.readingKey,
-        status: 'error',
-        message: 'readingKey 不能为空',
+        kind: 'result',
+        result: {
+          readingKey: record.readingKey,
+          status: 'error',
+          message: 'readingKey 不能为空',
+        },
       };
     }
 
@@ -106,9 +135,12 @@ class TemperatureEvidenceService {
       context = resolveNodeContext(record.nodeId);
     } catch (e) {
       return {
-        readingKey,
-        status: 'error',
-        message: e instanceof Error ? e.message : '节点解析失败',
+        kind: 'result',
+        result: {
+          readingKey,
+          status: 'error',
+          message: e instanceof Error ? e.message : '节点解析失败',
+        },
       };
     }
 
@@ -120,9 +152,12 @@ class TemperatureEvidenceService {
       });
     } catch (e) {
       return {
-        readingKey,
-        status: 'error',
-        message: e instanceof Error ? e.message : '时间解析失败',
+        kind: 'result',
+        result: {
+          readingKey,
+          status: 'error',
+          message: e instanceof Error ? e.message : '时间解析失败',
+        },
       };
     }
 
@@ -131,9 +166,12 @@ class TemperatureEvidenceService {
       normalizedTempC = celsiusToStorage(record.temperatureC);
     } catch (e) {
       return {
-        readingKey,
-        status: 'error',
-        message: e instanceof Error ? e.message : '温度解析失败',
+        kind: 'result',
+        result: {
+          readingKey,
+          status: 'error',
+          message: e instanceof Error ? e.message : '温度解析失败',
+        },
       };
     }
 
@@ -158,17 +196,23 @@ class TemperatureEvidenceService {
     if (existing) {
       if (existing.payloadHash === payloadHash) {
         return {
-          readingKey,
-          status: 'duplicate',
-          evidenceId: existing.id,
-          message: '相同证据已存在，幂等返回',
+          kind: 'result',
+          result: {
+            readingKey,
+            status: 'duplicate',
+            evidenceId: existing.id,
+            message: '相同证据已存在，幂等返回',
+          },
         };
       }
       return {
-        readingKey,
-        status: 'conflict',
-        evidenceId: existing.id,
-        message: '相同 readingKey 但载荷不同，冲突 (409)，禁止覆盖',
+        kind: 'result',
+        result: {
+          readingKey,
+          status: 'conflict',
+          evidenceId: existing.id,
+          message: '相同 readingKey 但载荷不同，冲突 (409)，禁止覆盖',
+        },
       };
     }
 
@@ -185,34 +229,51 @@ class TemperatureEvidenceService {
     const evidenceId = crypto.randomUUID();
     const batchId = options.batchId ?? crypto.randomUUID();
 
-    try {
-      const created = temperatureEvidenceRepository.append({
-        id: evidenceId,
-        batchId,
-        source: options.source,
-        readingKey,
-        nodeId: context.nodeId,
-        taskId: context.taskId,
-        orderId: context.orderId,
-        originalPayload: JSON.stringify(originalPayload),
-        normalizedTempC,
-        observedAt: observedAtUtc,
-        receivedAt: receivedAtUtc,
-        locationText,
-        operatorName,
-        payloadHash,
-        isAbnormal: abnormal,
-      });
+    const data: AppendEvidenceData = {
+      id: evidenceId,
+      batchId,
+      source: options.source,
+      readingKey,
+      nodeId: context.nodeId,
+      taskId: context.taskId,
+      orderId: context.orderId,
+      originalPayload: JSON.stringify(originalPayload),
+      normalizedTempC,
+      observedAt: observedAtUtc,
+      receivedAt: receivedAtUtc,
+      locationText,
+      operatorName,
+      payloadHash,
+      isAbnormal: abnormal,
+    };
 
+    return { kind: 'append', data, readingKey };
+  }
+
+  appendPrepared(data: AppendEvidenceData): TemperatureEvidence {
+    return temperatureEvidenceRepository.append(data);
+  }
+
+  submitOne(
+    record: TemperatureEvidenceSubmitRecord,
+    options: SubmitEvidenceOptions
+  ): TemperatureEvidenceSubmitResultItem {
+    const prepared = this.prepareSubmission(record, options);
+    if (prepared.kind === 'result') {
+      return prepared.result;
+    }
+
+    try {
+      const created = this.appendPrepared(prepared.data);
       return {
-        readingKey,
+        readingKey: prepared.readingKey,
         status: 'created',
         evidenceId: created.id,
-        message: abnormal ? '证据已记录（温度异常）' : '证据已记录',
+        message: created.isAbnormal ? '证据已记录（温度异常）' : '证据已记录',
       };
     } catch (e) {
       return {
-        readingKey,
+        readingKey: prepared.readingKey,
         status: 'error',
         message: e instanceof Error ? e.message : '证据写入失败',
       };
@@ -284,16 +345,16 @@ class TemperatureEvidenceService {
     });
   }
 
-  getEvidenceByNode(nodeId: string): TemperatureEvidence[] {
-    return temperatureEvidenceRepository.findByNodeId(nodeId);
+  getEvidenceByNode(nodeId: string): TemperatureEvidenceItem[] {
+    return temperatureEvidenceRepository.findByNodeId(nodeId).map(toEvidenceItem);
   }
 
-  getEvidenceByTask(taskId: string): TemperatureEvidence[] {
-    return temperatureEvidenceRepository.findByTaskId(taskId);
+  getEvidenceByTask(taskId: string): TemperatureEvidenceItem[] {
+    return temperatureEvidenceRepository.findByTaskId(taskId).map(toEvidenceItem);
   }
 
-  getEvidenceByBatch(batchId: string): TemperatureEvidence[] {
-    return temperatureEvidenceRepository.findByBatchId(batchId);
+  getEvidenceByBatch(batchId: string): TemperatureEvidenceItem[] {
+    return temperatureEvidenceRepository.findByBatchId(batchId).map(toEvidenceItem);
   }
 
   getTimelineByTask(taskId: string): TemperatureEvidenceTimelineResponse {
@@ -323,7 +384,7 @@ class TemperatureEvidenceService {
       abnormalCount: anomalous.length,
       latestObservedAt,
       hasAnomaly: anomalous.length > 0,
-      anomalousEvidence: anomalous,
+      anomalousEvidence: anomalous.map(toEvidenceItem),
     };
   }
 

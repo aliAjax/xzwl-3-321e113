@@ -1,5 +1,5 @@
-export { temperatureEvidenceService } from './service.js';
-export type { SubmitEvidenceOptions, ResolvedNodeContext } from './service.js';
+export { temperatureEvidenceService, toEvidenceItem } from './service.js';
+export type { SubmitEvidenceOptions, ResolvedNodeContext, PreparedSubmission } from './service.js';
 export {
   celsiusToStorage,
   storageToCelsius,

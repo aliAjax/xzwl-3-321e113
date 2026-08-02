@@ -3,6 +3,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import db from '../db/index.js';
 import { temperatureEvidenceService } from './temperatureEvidence/index.js';
 import { parseObservedAt, parseTemperatureString, DEFAULT_CSV_OFFSET_MINUTES } from './temperatureEvidence/index.js';
 import type {
@@ -469,13 +470,14 @@ function executeImport(
       continue;
     }
 
+    const tempValue: number = parsed.temperature;
     const observedAtIso = parsed.recordedAt.toISOString();
     const readingKey = buildCsvReadingKey(parsed.orderNo, node.nodeType, parsed.recordedAt);
 
-    const evidenceResult = temperatureEvidenceService.submitOne({
+    const prepared = temperatureEvidenceService.prepareSubmission({
       readingKey,
       nodeId: node.id,
-      temperatureC: parsed.temperature,
+      temperatureC: tempValue,
       observedAt: observedAtIso,
       locationText: parsed.locationText,
       operatorName: parsed.operatorName || operator.name,
@@ -484,7 +486,7 @@ function executeImport(
         lineNumber: record.lineNumber,
         orderNo: parsed.orderNo,
         nodeType: node.nodeType,
-        temperature: parsed.temperature,
+        temperature: tempValue,
         recordedAt: observedAtIso,
         locationText: parsed.locationText,
         operatorName: parsed.operatorName,
@@ -496,48 +498,34 @@ function executeImport(
       defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
     });
 
-    if (evidenceResult.status === 'conflict') {
-      conflictCount++;
-      results.push({
-        lineNumber: record.lineNumber,
-        orderNo: parsed.orderNo,
-        success: false,
-        isException: false,
-        isSkipped: false,
-        isConflict: true,
-        nodeId: node.id,
-        evidenceId: evidenceResult.evidenceId,
-        readingKey,
-        message: `证据冲突: ${evidenceResult.message}`,
-      });
-      continue;
-    }
-
-    if (evidenceResult.status === 'error') {
-      results.push({
-        lineNumber: record.lineNumber,
-        orderNo: parsed.orderNo,
-        success: false,
-        isException: false,
-        isSkipped: false,
-        nodeId: node.id,
-        readingKey,
-        message: `证据写入失败: ${evidenceResult.message}`,
-      });
-      failedCount++;
-      continue;
-    }
-
-    try {
-      if (record.status === 'importable') {
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature,
-          recordedAt: observedAtIso,
+    if (prepared.kind === 'result') {
+      if (prepared.result.status === 'conflict') {
+        conflictCount++;
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          isConflict: true,
+          nodeId: node.id,
+          evidenceId: prepared.result.evidenceId,
+          readingKey,
+          message: `证据冲突: ${prepared.result.message}`,
         });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
-
+      } else if (prepared.result.status === 'error') {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          nodeId: node.id,
+          readingKey,
+          message: `证据写入失败: ${prepared.result.message}`,
+        });
+        failedCount++;
+      } else {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -545,36 +533,71 @@ function executeImport(
           isException: false,
           isSkipped: false,
           nodeId: node.id,
-          evidenceId: evidenceResult.evidenceId,
+          evidenceId: prepared.result.evidenceId,
+          readingKey,
+          message: '证据已存在（幂等）',
+        });
+        successCount++;
+      }
+      continue;
+    }
+
+    try {
+      const txResult = db.transaction((): { exceptionId?: string } => {
+        temperatureEvidenceService.appendPrepared(prepared.data);
+
+        if (record.status === 'importable') {
+          nodeRepository.completeNode(node.id, {
+            locationText: parsed.locationText,
+            temperature: tempValue,
+            recordedAt: observedAtIso,
+          });
+
+          deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+          return {};
+        } else {
+          const exceptionDesc = record.failureReasons.join('; ');
+
+          nodeRepository.completeNode(node.id, {
+            locationText: parsed.locationText,
+            temperature: tempValue,
+            exceptionDescription: exceptionDesc,
+            recordedAt: observedAtIso,
+          });
+
+          deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
+
+          const exceptionId = generateId();
+          exceptionHandlingRepository.createHandling({
+            id: exceptionId,
+            nodeId: node.id,
+            taskId: task.id,
+            orderId: order.id,
+            driverId: task.driverId,
+            temperatureZone: order.temperatureZone,
+            exceptionDescription: exceptionDesc,
+            exceptionTime: observedAtIso,
+            handlingStatus: 'pending',
+          });
+
+          return { exceptionId };
+        }
+      })();
+
+      if (record.status === 'importable') {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: true,
+          isException: false,
+          isSkipped: false,
+          nodeId: node.id,
+          evidenceId: prepared.data.id,
           readingKey,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
         });
         successCount++;
-      } else if (record.status === 'abnormal') {
-        const exceptionDesc = record.failureReasons.join('; ');
-
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature,
-          exceptionDescription: exceptionDesc,
-          recordedAt: observedAtIso,
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
-
-        const exceptionId = generateId();
-        exceptionHandlingRepository.createHandling({
-          id: exceptionId,
-          nodeId: node.id,
-          taskId: task.id,
-          orderId: order.id,
-          driverId: task.driverId,
-          temperatureZone: order.temperatureZone,
-          exceptionDescription: exceptionDesc,
-          exceptionTime: observedAtIso,
-          handlingStatus: 'pending',
-        });
-
+      } else {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -582,8 +605,8 @@ function executeImport(
           isException: true,
           isSkipped: false,
           nodeId: node.id,
-          exceptionId,
-          evidenceId: evidenceResult.evidenceId,
+          exceptionId: txResult.exceptionId,
+          evidenceId: prepared.data.id,
           readingKey,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
         });
@@ -598,9 +621,8 @@ function executeImport(
         isException: false,
         isSkipped: false,
         nodeId: node.id,
-        evidenceId: evidenceResult.evidenceId,
         readingKey,
-        message: `节点更新失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        message: `导入失败: ${error instanceof Error ? error.message : '未知错误'}`,
       });
       failedCount++;
     }

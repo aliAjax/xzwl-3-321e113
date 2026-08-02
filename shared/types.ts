@@ -850,6 +850,24 @@ export interface TemperatureEvidence {
   createdAt: string;
 }
 
+export interface TemperatureEvidenceItem {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  temperatureCelsius: number;
+  normalizedTempC: number;
+  observedAt: string;
+  receivedAt: string;
+  locationText: string;
+  operatorName: string;
+  isAbnormal: boolean;
+  createdAt: string;
+}
+
 export interface TemperatureEvidenceSubmitRecord {
   readingKey: string;
   nodeId: string;
@@ -912,7 +930,7 @@ export interface TemperatureEvidenceNodeSummary {
   abnormalCount: number;
   latestObservedAt?: string;
   hasAnomaly: boolean;
-  anomalousEvidence: TemperatureEvidence[];
+  anomalousEvidence: TemperatureEvidenceItem[];
 }
 
 export interface TemperatureEvidenceBatchSummary {
@@ -927,7 +945,7 @@ export interface TemperatureEvidenceBatchSummary {
 }
 
 export interface TemperatureEvidenceListResponse {
-  items: TemperatureEvidence[];
+  items: TemperatureEvidenceItem[];
   total: number;
 }
 
