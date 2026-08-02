@@ -2,8 +2,6 @@ import { Request, Response } from 'express';
 import { temperatureEvidenceService } from '../services/temperatureEvidence/index.js';
 import type {
   TemperatureEvidenceSubmitRecord,
-  TemperatureEvidenceDriverSubmitRequest,
-  TemperatureEvidenceBackfillRequest,
   User,
 } from '../../shared/types.js';
 
@@ -62,12 +60,11 @@ export const temperatureEvidenceController = {
 
       const result = temperatureEvidenceService.submitDriverOffline(enrichedRecords);
 
-      const hasConflict = result.conflictCount > 0;
-      const statusCode = hasConflict && result.createdCount === 0 && result.errorCount === 0
-        ? 409
-        : 200;
+      if (result.conflictCount > 0) {
+        return res.status(409).json(result);
+      }
 
-      return res.status(statusCode).json(result);
+      return res.status(200).json(result);
     } catch (error) {
       return res.status(500).json({
         message: '司机温度证据上报失败',
@@ -94,6 +91,11 @@ export const temperatureEvidenceController = {
       }));
 
       const result = temperatureEvidenceService.submitHistoricalBackfill(enrichedRecords);
+
+      if (result.conflictCount > 0) {
+        return res.status(409).json(result);
+      }
+
       return res.status(200).json(result);
     } catch (error) {
       return res.status(500).json({

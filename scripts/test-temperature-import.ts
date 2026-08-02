@@ -10,6 +10,7 @@ import { nodeRepository } from '../api/repositories/node.repository';
 import { exceptionHandlingRepository } from '../api/repositories/exception.repository';
 import { processingNoteRepository } from '../api/repositories/processing-notes.repository';
 import { customerRepository } from '../api/repositories/customer.repository';
+import { temperatureEvidenceRepository } from '../api/repositories/temperatureEvidence.repository';
 import { temperatureImportService } from '../api/services/temperatureImport.service';
 import { deliveryService } from '../api/services/delivery.service';
 import type {
@@ -181,6 +182,24 @@ function initTestDatabase(): DatabaseType {
       new_value TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
+    `CREATE TABLE IF NOT EXISTS temperature_evidence_ledger (
+      id VARCHAR(36) PRIMARY KEY,
+      batch_id VARCHAR(64) NOT NULL,
+      source VARCHAR(20) NOT NULL CHECK (source IN ('csv_import', 'driver_offline', 'historical_backfill')),
+      reading_key VARCHAR(128) NOT NULL UNIQUE,
+      node_id VARCHAR(36),
+      task_id VARCHAR(36) NOT NULL,
+      order_id VARCHAR(36) NOT NULL,
+      original_payload TEXT NOT NULL,
+      normalized_temp_c INTEGER NOT NULL,
+      observed_at DATETIME NOT NULL,
+      received_at DATETIME NOT NULL,
+      location_text VARCHAR(200),
+      operator_name VARCHAR(100),
+      payload_hash VARCHAR(64) NOT NULL,
+      is_abnormal INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
   ];
 
   migrations.forEach(sql => db.exec(sql));
@@ -196,6 +215,7 @@ function patchRepositories(db: DatabaseType): void {
   (exceptionHandlingRepository as any).db = db;
   (processingNoteRepository as any).db = db;
   (customerRepository as any).db = db;
+  (temperatureEvidenceRepository as any).db = db;
 }
 
 function createTestUser(): User {
@@ -309,6 +329,7 @@ function setupFullTestData(): {
   user: User; order: Order; task: DeliveryTask; nodes: DeliveryNode[] } {
   testDb.exec('DELETE FROM exception_processing_notes');
   testDb.exec('DELETE FROM exception_handlings');
+  testDb.exec('DELETE FROM temperature_evidence_ledger');
   testDb.exec('DELETE FROM delivery_nodes');
   testDb.exec('DELETE FROM delivery_tasks');
   testDb.exec('DELETE FROM loading_batches');

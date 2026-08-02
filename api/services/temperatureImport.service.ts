@@ -4,7 +4,7 @@ import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
 import { temperatureEvidenceService } from './temperatureEvidence/index.js';
-import { parseObservedAt, DEFAULT_CSV_OFFSET_MINUTES } from './temperatureEvidence/index.js';
+import { parseObservedAt, parseTemperatureString, DEFAULT_CSV_OFFSET_MINUTES } from './temperatureEvidence/index.js';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -20,7 +20,6 @@ import type {
   TemperatureRecordColumnMapping,
   TemperatureRecordColumnParseResult,
   TemperatureRecordFieldKey,
-  TemperatureEvidenceSubmitRecord,
 } from '../../shared/types';
 
 function generateId(): string {
@@ -189,43 +188,24 @@ function parseRow(row: TemperatureRecordCsvRow, lineNumber: number): Temperature
   let recordedAt: Date | null = null;
   const dateStr = (row.recordedAt || '').trim();
   if (dateStr) {
-    const parsedDate = new Date(dateStr);
-    if (!isNaN(parsedDate.getTime())) {
-      recordedAt = parsedDate;
-    } else {
-      const formats = [
-        /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/,
-        /^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/,
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/,
-        /^(\d{4})年(\d{2})月(\d{2})日\s*(\d{2})?:?(\d{2})?:?(\d{2})?$/,
-      ];
-      for (const regex of formats) {
-        const match = dateStr.match(regex);
-        if (match) {
-          const [, y, m, d, h = '0', min = '0', s = '0'] = match;
-          const constructedDate = new Date(
-            parseInt(y),
-            parseInt(m) - 1,
-            parseInt(d),
-            parseInt(h),
-            parseInt(min),
-            parseInt(s)
-          );
-          if (!isNaN(constructedDate.getTime())) {
-            recordedAt = constructedDate;
-            break;
-          }
-        }
-      }
+    try {
+      recordedAt = parseObservedAt(dateStr, {
+        requireTimezone: false,
+        defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
+      });
+    } catch {
+      recordedAt = null;
     }
   }
 
   let temperature: number | null = null;
   const tempStr = (row.temperature || '').trim();
   if (tempStr) {
-    const parsedTemp = parseFloat(tempStr);
-    if (!isNaN(parsedTemp)) {
-      temperature = parsedTemp;
+    try {
+      const parsed = parseTemperatureString(tempStr);
+      temperature = parsed.valueCelsius;
+    } catch {
+      temperature = null;
     }
   }
 
@@ -427,17 +407,9 @@ function previewImport(csvText: string, mapping?: TemperatureRecordColumnMapping
 function buildCsvReadingKey(
   orderNo: string,
   nodeType: NodeType,
-  recordedAtRaw: string
+  observedAt: Date
 ): string {
-  try {
-    const observedAt = parseObservedAt(recordedAtRaw, {
-      requireTimezone: false,
-      defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
-    });
-    return `csv:${orderNo}:${nodeType}:${observedAt.toISOString()}`;
-  } catch {
-    return `csv:${orderNo}:${nodeType}:${recordedAtRaw}`;
-  }
+  return `csv:${orderNo}:${nodeType}:${observedAt.toISOString()}`;
 }
 
 function executeImport(
@@ -449,7 +421,7 @@ function executeImport(
   let failedCount = 0;
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
-  const evidenceRecords: TemperatureEvidenceSubmitRecord[] = [];
+  let conflictCount = 0;
 
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
@@ -484,12 +456,84 @@ function executeImport(
 
     const { node, task, order } = matched;
 
+    if (parsed.temperature === null || !parsed.recordedAt) {
+      results.push({
+        lineNumber: record.lineNumber,
+        orderNo: parsed.orderNo,
+        success: false,
+        isException: false,
+        isSkipped: false,
+        message: '温度或时间数据无效',
+      });
+      failedCount++;
+      continue;
+    }
+
+    const observedAtIso = parsed.recordedAt.toISOString();
+    const readingKey = buildCsvReadingKey(parsed.orderNo, node.nodeType, parsed.recordedAt);
+
+    const evidenceResult = temperatureEvidenceService.submitOne({
+      readingKey,
+      nodeId: node.id,
+      temperatureC: parsed.temperature,
+      observedAt: observedAtIso,
+      locationText: parsed.locationText,
+      operatorName: parsed.operatorName || operator.name,
+      originalPayload: {
+        source: 'csv_import',
+        lineNumber: record.lineNumber,
+        orderNo: parsed.orderNo,
+        nodeType: node.nodeType,
+        temperature: parsed.temperature,
+        recordedAt: observedAtIso,
+        locationText: parsed.locationText,
+        operatorName: parsed.operatorName,
+        failureReasons: record.failureReasons,
+      },
+    }, {
+      source: 'csv_import',
+      requireTimezone: false,
+      defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
+    });
+
+    if (evidenceResult.status === 'conflict') {
+      conflictCount++;
+      results.push({
+        lineNumber: record.lineNumber,
+        orderNo: parsed.orderNo,
+        success: false,
+        isException: false,
+        isSkipped: false,
+        isConflict: true,
+        nodeId: node.id,
+        evidenceId: evidenceResult.evidenceId,
+        readingKey,
+        message: `证据冲突: ${evidenceResult.message}`,
+      });
+      continue;
+    }
+
+    if (evidenceResult.status === 'error') {
+      results.push({
+        lineNumber: record.lineNumber,
+        orderNo: parsed.orderNo,
+        success: false,
+        isException: false,
+        isSkipped: false,
+        nodeId: node.id,
+        readingKey,
+        message: `证据写入失败: ${evidenceResult.message}`,
+      });
+      failedCount++;
+      continue;
+    }
+
     try {
       if (record.status === 'importable') {
         nodeRepository.completeNode(node.id, {
           locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          recordedAt: parsed.recordedAt!.toISOString(),
+          temperature: parsed.temperature,
+          recordedAt: observedAtIso,
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
@@ -501,6 +545,8 @@ function executeImport(
           isException: false,
           isSkipped: false,
           nodeId: node.id,
+          evidenceId: evidenceResult.evidenceId,
+          readingKey,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
         });
         successCount++;
@@ -509,9 +555,9 @@ function executeImport(
 
         nodeRepository.completeNode(node.id, {
           locationText: parsed.locationText,
-          temperature: parsed.temperature!,
+          temperature: parsed.temperature,
           exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
+          recordedAt: observedAtIso,
         });
 
         deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
@@ -525,7 +571,7 @@ function executeImport(
           driverId: task.driverId,
           temperatureZone: order.temperatureZone,
           exceptionDescription: exceptionDesc,
-          exceptionTime: parsed.recordedAt!.toISOString(),
+          exceptionTime: observedAtIso,
           handlingStatus: 'pending',
         });
 
@@ -537,38 +583,12 @@ function executeImport(
           isSkipped: false,
           nodeId: node.id,
           exceptionId,
+          evidenceId: evidenceResult.evidenceId,
+          readingKey,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
         });
         successCount++;
         exceptionCreatedCount++;
-      }
-
-      if (parsed.temperature !== null && parsed.recordedAt) {
-        const observedAtIso = parsed.recordedAt.toISOString();
-        const readingKey = buildCsvReadingKey(
-          parsed.orderNo,
-          node.nodeType,
-          observedAtIso
-        );
-        evidenceRecords.push({
-          readingKey,
-          nodeId: node.id,
-          temperatureC: parsed.temperature,
-          observedAt: observedAtIso,
-          locationText: parsed.locationText,
-          operatorName: parsed.operatorName || operator.name,
-          originalPayload: {
-            source: 'csv_import',
-            lineNumber: record.lineNumber,
-            orderNo: parsed.orderNo,
-            nodeType: node.nodeType,
-            temperature: parsed.temperature,
-            recordedAt: observedAtIso,
-            locationText: parsed.locationText,
-            operatorName: parsed.operatorName,
-            failureReasons: record.failureReasons,
-          },
-        });
       }
     } catch (error) {
       results.push({
@@ -577,17 +597,12 @@ function executeImport(
         success: false,
         isException: false,
         isSkipped: false,
-        message: `导入失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        nodeId: node.id,
+        evidenceId: evidenceResult.evidenceId,
+        readingKey,
+        message: `节点更新失败: ${error instanceof Error ? error.message : '未知错误'}`,
       });
       failedCount++;
-    }
-  }
-
-  if (evidenceRecords.length > 0) {
-    try {
-      temperatureEvidenceService.submitCsvImport(evidenceRecords);
-    } catch (e) {
-      console.error('温度证据账本写入失败:', e instanceof Error ? e.message : e);
     }
   }
 
@@ -596,6 +611,7 @@ function executeImport(
     failedCount,
     skippedCount,
     exceptionCreatedCount,
+    conflictCount,
     results,
   };
 }

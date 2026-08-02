@@ -207,6 +207,83 @@ export const deliveryService = {
       };
     }
 
+    const isDriverSubmission = operator.role === 'driver';
+    let evidenceResult: { status: 'created' | 'duplicate' | 'conflict' | 'error'; evidenceId?: string; message: string } | null = null;
+
+    if (request.temperature !== undefined) {
+      const readingKey = request.clientSubmitId
+        ? `driver:${request.clientSubmitId}`
+        : `driver:${nodeId}:${Date.now()}`;
+
+      let observedAt: string;
+      if (request.updatedAt && hasTimezoneInfo(request.updatedAt)) {
+        observedAt = request.updatedAt;
+      } else if (isDriverSubmission) {
+        return {
+          success: false,
+          conflict: {
+            type: 'evidence_conflict',
+            message: '司机上报数据必须包含时区信息（如 Z 或 +08:00）',
+            currentNode: node,
+            submittedData: request,
+          },
+        };
+      } else {
+        observedAt = new Date().toISOString();
+      }
+
+      evidenceResult = temperatureEvidenceService.submitOne({
+        readingKey,
+        nodeId,
+        temperatureC: request.temperature,
+        observedAt,
+        locationText: request.locationText,
+        operatorName: operator.name,
+        originalPayload: {
+          source: 'driver_offline',
+          nodeId,
+          taskId: node.taskId,
+          status: request.status,
+          temperature: request.temperature,
+          clientSubmitId: request.clientSubmitId,
+          exceptionDescription: request.exceptionDescription,
+          submittedUpdatedAt: request.updatedAt,
+        },
+      }, {
+        source: 'driver_offline',
+        requireTimezone: isDriverSubmission,
+      });
+
+      if (evidenceResult.status === 'conflict') {
+        return {
+          success: false,
+          conflict: {
+            type: 'evidence_conflict',
+            message: `温度证据冲突: ${evidenceResult.message}`,
+            currentNode: node,
+            submittedData: request,
+          },
+          evidenceConflict: {
+            readingKey,
+            existingEvidenceId: evidenceResult.evidenceId || '',
+            message: evidenceResult.message,
+          },
+        };
+      }
+
+      if (evidenceResult.status === 'error') {
+        return {
+          success: false,
+          conflict: {
+            type: 'evidence_conflict',
+            message: `温度证据写入失败: ${evidenceResult.message}`,
+            currentNode: node,
+            submittedData: request,
+          },
+        };
+      }
+    }
+
     const updatedNode = nodeRepository.completeNode(nodeId, {
       locationText: request.locationText,
       temperature: request.temperature,
@@ -230,43 +307,6 @@ export const deliveryService = {
 
     if (updatedNode) {
       this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
-
-      if (request.temperature !== undefined && updatedNode.temperature !== null) {
-        try {
-          const readingKey = request.clientSubmitId
-            ? `driver:${request.clientSubmitId}`
-            : `driver:${nodeId}:${Date.now()}`;
-
-          const candidateObservedAt = request.updatedAt;
-          const observedAt = candidateObservedAt && hasTimezoneInfo(candidateObservedAt)
-            ? candidateObservedAt
-            : new Date().toISOString();
-
-          temperatureEvidenceService.submitOne({
-            readingKey,
-            nodeId,
-            temperatureC: request.temperature,
-            observedAt,
-            locationText: request.locationText,
-            operatorName: operator.name,
-            originalPayload: {
-              source: 'driver_offline',
-              nodeId,
-              taskId: node.taskId,
-              status: request.status,
-              temperature: request.temperature,
-              clientSubmitId: request.clientSubmitId,
-              exceptionDescription: request.exceptionDescription,
-              submittedUpdatedAt: request.updatedAt,
-            },
-          }, {
-            source: 'driver_offline',
-            requireTimezone: false,
-          });
-        } catch (e) {
-          console.error('司机温度证据写入账本失败:', e instanceof Error ? e.message : e);
-        }
-      }
     }
 
     return {
