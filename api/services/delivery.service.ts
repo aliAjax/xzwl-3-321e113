@@ -179,21 +179,30 @@ export const deliveryService = {
       const existingNode = nodeRepository.findByClientSubmitId(request.clientSubmitId);
       if (existingNode) {
         const readingKey = `driver:${request.clientSubmitId}`;
-        const existingEvidence = temperatureLedgerService.getByReadingKey(readingKey);
-        if (existingEvidence && request.temperature !== undefined && request.temperature !== null) {
-          const submittedCenti = Math.round(request.temperature * 100);
-          if (existingEvidence.temperatureCenti !== submittedCenti) {
-            return {
-              success: false,
-              conflict: {
-                type: 'concurrent_update',
-                message: `readingKey ${readingKey} 已存在但标准化载荷不同（温度由 ${(existingEvidence.temperatureCenti / 100).toFixed(2)}°C 改为 ${request.temperature}°C），禁止强制覆盖`,
-                currentNode: existingNode,
-                submittedData: request,
-              },
-            };
-          }
+        const observedAt = request.updatedAt || existingNode.recordedAt || new Date().toISOString();
+        const assessment = temperatureLedgerService.assessDuplicate(readingKey, {
+          source: 'driver_offline',
+          temperatureCelsius: request.temperature ?? existingNode.temperature ?? 0,
+          observedAt,
+          nodeId: existingNode.id,
+          taskId: existingNode.taskId,
+          orderId: order?.id,
+          nodeType: existingNode.nodeType,
+          orderNo: order?.orderNo,
+        });
+
+        if (assessment.kind === 'conflict') {
+          return {
+            success: false,
+            conflict: {
+              type: 'concurrent_update',
+              message: `readingKey ${readingKey} 已存在但标准化载荷不同，禁止强制覆盖 (409)`,
+              currentNode: existingNode,
+              submittedData: request,
+            },
+          };
         }
+
         return {
           success: true,
           node: existingNode,

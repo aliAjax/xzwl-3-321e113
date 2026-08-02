@@ -33,7 +33,7 @@ export type EvidenceBatchCreateResultApi = Omit<EvidenceBatchCreateResult, 'resu
 };
 
 export function serializeEvidence(evidence: TemperatureEvidence): TemperatureEvidenceApi {
-  const { temperatureCenti, ...rest } = evidence;
+  const { temperatureCenti, rawPayload, payloadHash, ...rest } = evidence;
   return {
     ...rest,
     temperatureCelsius: centiToCelsius(temperatureCenti),
