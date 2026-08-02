@@ -179,15 +179,16 @@ export const deliveryService = {
       const existingNode = nodeRepository.findByClientSubmitId(request.clientSubmitId);
       if (existingNode) {
         const readingKey = `driver:${request.clientSubmitId}`;
-        const observedAt = request.updatedAt || existingNode.recordedAt || new Date().toISOString();
+        const observedAt = request.updatedAt || node.recordedAt || new Date().toISOString();
+        const temperatureCelsius = request.temperature ?? node.temperature ?? existingNode.temperature ?? 0;
         const assessment = temperatureLedgerService.assessDuplicate(readingKey, {
           source: 'driver_offline',
-          temperatureCelsius: request.temperature ?? existingNode.temperature ?? 0,
+          temperatureCelsius,
           observedAt,
-          nodeId: existingNode.id,
-          taskId: existingNode.taskId,
+          nodeId: node.id,
+          taskId: node.taskId,
           orderId: order?.id,
-          nodeType: existingNode.nodeType,
+          nodeType: node.nodeType,
           orderNo: order?.orderNo,
         });
 
@@ -196,7 +197,7 @@ export const deliveryService = {
             success: false,
             conflict: {
               type: 'concurrent_update',
-              message: `readingKey ${readingKey} 已存在但标准化载荷不同，禁止强制覆盖 (409)`,
+              message: `readingKey ${readingKey} 已存在但标准化载荷不同（${existingNode.id === node.id ? '节点内载荷变更' : 'clientSubmitId 跨节点复用'}），禁止强制覆盖 (409)`,
               currentNode: existingNode,
               submittedData: request,
             },
