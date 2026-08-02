@@ -204,11 +204,21 @@ export const deliveryService = {
           };
         }
 
-        return {
-          success: true,
-          node: existingNode,
-          isDuplicate: true,
-        };
+        if (assessment.kind === 'idempotent') {
+          return {
+            success: true,
+            node: existingNode,
+            isDuplicate: true,
+          };
+        }
+
+        if (existingNode.id === node.id) {
+          return {
+            success: true,
+            node: existingNode,
+            isDuplicate: true,
+          };
+        }
       }
     }
 
