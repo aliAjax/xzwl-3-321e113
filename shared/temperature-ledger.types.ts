@@ -41,7 +41,6 @@ export interface TemperatureEvidenceInput {
   rawPayload: Record<string, unknown>;
   temperatureCelsius: number;
   observedAt: string;
-  receivedAt?: string;
   nodeId?: string;
   taskId?: string;
   orderId?: string;
@@ -50,6 +49,27 @@ export interface TemperatureEvidenceInput {
   locationText?: string;
   operatorName?: string;
 }
+
+export interface NodeEvidenceInput {
+  source: EvidenceSource;
+  readingKey: string;
+  rawPayload: Record<string, unknown>;
+  nodeId: string;
+  taskId?: string;
+  orderId?: string;
+  nodeType?: NodeType;
+  orderNo?: string;
+  temperatureCelsius?: number;
+  observedAt?: string;
+  locationText?: string;
+  operatorName?: string;
+  exceptionDescription?: string;
+  clientSubmitId?: string;
+}
+
+export type NodeEvidenceOutcome =
+  | { status: 'created' | 'idempotent'; evidence: TemperatureEvidence; judgment: EvidenceJudgment; abnormalReasons: string[] }
+  | { status: 'conflict'; existingEvidence: TemperatureEvidence; submittedStandardizedHash: string; message: string };
 
 export interface EvidenceBatchCreateResult {
   batchId: string;

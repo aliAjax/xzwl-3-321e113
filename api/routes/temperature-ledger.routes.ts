@@ -31,6 +31,12 @@ router.post(
   temperatureLedgerController.backfillHistorical
 );
 
+router.post(
+  '/evidence/backfill-from-nodes',
+  requireRoles('admin', 'dispatcher'),
+  temperatureLedgerController.backfillFromExistingNodes
+);
+
 router.get(
   '/evidence/node/:nodeId',
   requireRoles('admin', 'dispatcher', 'driver'),

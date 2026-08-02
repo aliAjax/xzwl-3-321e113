@@ -2,6 +2,9 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
+import { exceptionHandlingRepository } from '../repositories/exception.repository';
+import { temperatureLedgerService } from './temperature-ledger.service';
+import { LedgerConflictError } from '../../shared/temperature-ledger.types';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -228,6 +231,68 @@ export const deliveryService = {
 
     if (updatedNode) {
       this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
+
+      if (request.temperature !== undefined && request.temperature !== null) {
+        try {
+          const task = taskRepository.findById(node.taskId);
+          const order = task ? orderRepository.findById(task.orderId) : undefined;
+          const clientSubmitId = request.clientSubmitId;
+          const observedAt = request.updatedAt || updatedNode.recordedAt || new Date().toISOString();
+          const readingKey = clientSubmitId
+            ? `driver:${clientSubmitId}`
+            : `driver:${node.id}:${observedAt}`;
+
+          const rawPayload: Record<string, unknown> = {
+            nodeId: node.id,
+            taskId: node.taskId,
+            nodeType: node.nodeType,
+            temperature: request.temperature,
+            observedAt,
+            locationText: request.locationText ?? null,
+            exceptionDescription: request.exceptionDescription ?? null,
+            clientSubmitId: clientSubmitId ?? null,
+            operatorId: operator.id,
+            operatorName: operator.name,
+          };
+
+          temperatureLedgerService.append(
+            {
+              source: 'driver_offline',
+              readingKey,
+              rawPayload,
+              temperatureCelsius: request.temperature,
+              observedAt,
+              nodeId: node.id,
+              taskId: node.taskId,
+              orderId: order?.id,
+              nodeType: node.nodeType,
+              orderNo: order?.orderNo,
+              locationText: request.locationText,
+              operatorName: operator.name,
+            },
+          );
+
+          if (updatedNode.status === 'exception' && task && order) {
+            const existing = exceptionHandlingRepository.findByNodeId(node.id);
+            if (!existing) {
+              exceptionHandlingRepository.createHandling({
+                nodeId: node.id,
+                taskId: task.id,
+                orderId: order.id,
+                driverId: task.driverId,
+                temperatureZone: order.temperatureZone,
+                exceptionDescription: request.exceptionDescription || '温度异常',
+                exceptionTime: observedAt,
+                handlingStatus: 'pending',
+              });
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof LedgerConflictError)) {
+            throw error;
+          }
+        }
+      }
     }
 
     return {

@@ -6,12 +6,15 @@ import {
 import { orderRepository } from '../repositories/order.repository';
 import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
-import { computePayloadHash, canonicalizePayload } from '../utils/fingerprint';
+import { exceptionHandlingRepository } from '../repositories/exception.repository';
+import {
+  computeStandardizedPayloadHash,
+  buildStandardizedPayload,
+} from '../utils/fingerprint';
 import {
   celsiusToCenti,
   centiToCelsius,
   parseObservedAt,
-  normalizeReceivedAt,
   asString,
   asNumber,
   asOptionalString,
@@ -25,6 +28,8 @@ import {
 import type {
   TemperatureEvidence,
   TemperatureEvidenceInput,
+  NodeEvidenceInput,
+  NodeEvidenceOutcome,
   EvidenceBatchCreateResult,
   EvidenceBatchItemResult,
   EvidenceTimeline,
@@ -83,11 +88,6 @@ interface CsvHeaderMap {
   temperature: number;
   locationText?: number;
   operatorName?: number;
-}
-
-interface RawCsvRow {
-  values: string[];
-  lineNumber: number;
 }
 
 function detectSeparator(headerLine: string): string {
@@ -188,13 +188,13 @@ function parseCsvToEvidenceInputs(csvText: string): ParsedCsvEvidence[] {
 
   for (let i = 1; i < lines.length; i++) {
     const values = splitCsvLine(lines[i], separator);
-    const row: RawCsvRow = { values, lineNumber: i + 1 };
+    const lineNumber = i + 1;
 
     const orderNo = asString(values[headerMap.orderNo], 'orderNo');
     const nodeTypeRaw = (values[headerMap.nodeType] ?? '').trim().toLowerCase();
     const nodeType = CSV_NODE_TYPE_MAP[nodeTypeRaw];
     if (!nodeType) {
-      throw new LedgerValidationError('nodeType', `第${row.lineNumber}行节点类型无效: ${values[headerMap.nodeType] ?? ''}`);
+      throw new LedgerValidationError('nodeType', `第${lineNumber}行节点类型无效: ${values[headerMap.nodeType] ?? ''}`);
     }
     const recordedAtRaw = asString(values[headerMap.recordedAt], 'recordedAt');
     const temperatureCelsius = asNumber(values[headerMap.temperature], 'temperature');
@@ -215,11 +215,11 @@ function parseCsvToEvidenceInputs(csvText: string): ParsedCsvEvidence[] {
       temperature: temperatureCelsius,
       locationText: locationText ?? null,
       operatorName: operatorName ?? null,
-      lineNumber: row.lineNumber,
+      lineNumber,
     };
 
     result.push({
-      lineNumber: row.lineNumber,
+      lineNumber,
       readingKey,
       orderNo,
       nodeType,
@@ -234,7 +234,10 @@ function parseCsvToEvidenceInputs(csvText: string): ParsedCsvEvidence[] {
   return result;
 }
 
-function judgeTemperature(temperatureCelsius: number, order: Order): { judgment: 'normal' | 'abnormal'; reasons: string[]; minTemp: number; maxTemp: number } {
+function judgeTemperature(
+  temperatureCelsius: number,
+  order: Order
+): { judgment: 'normal' | 'abnormal'; reasons: string[]; minTemp: number; maxTemp: number } {
   const reasons: string[] = [];
   if (temperatureCelsius < order.minTemp) {
     reasons.push(`温度 ${temperatureCelsius}°C 低于最低要求 ${order.minTemp}°C`);
@@ -257,16 +260,6 @@ interface ResolvedNodeContext {
   order: Order;
 }
 
-function resolveNodeByOrderAndType(orderNo: string, nodeType: NodeType): ResolvedNodeContext | undefined {
-  const order = orderRepository.findByOrderNo(orderNo);
-  if (!order) return undefined;
-  const task = taskRepository.findByOrderId(order.id);
-  if (!task) return undefined;
-  const node = nodeRepository.findByTaskIdAndNodeType(task.id, nodeType);
-  if (!node) return undefined;
-  return { nodeId: node.id, taskId: task.id, orderId: order.id, order };
-}
-
 function resolveNodeById(nodeId: string): ResolvedNodeContext | undefined {
   const node = nodeRepository.findById(nodeId);
   if (!node) return undefined;
@@ -274,6 +267,16 @@ function resolveNodeById(nodeId: string): ResolvedNodeContext | undefined {
   if (!task) return undefined;
   const order = orderRepository.findById(task.orderId);
   if (!order) return undefined;
+  return { nodeId: node.id, taskId: task.id, orderId: order.id, order };
+}
+
+function resolveNodeByOrderAndType(orderNo: string, nodeType: NodeType): ResolvedNodeContext | undefined {
+  const order = orderRepository.findByOrderNo(orderNo);
+  if (!order) return undefined;
+  const task = taskRepository.findByOrderId(order.id);
+  if (!task) return undefined;
+  const node = nodeRepository.findByTaskIdAndNodeType(task.id, nodeType);
+  if (!node) return undefined;
   return { nodeId: node.id, taskId: task.id, orderId: order.id, order };
 }
 
@@ -296,6 +299,188 @@ function sortTimeline(entries: EvidenceTimelineEntry[]): EvidenceTimelineEntry[]
   });
 }
 
+interface AppendCoreResult {
+  evidence: TemperatureEvidence;
+  idempotent: boolean;
+  judgment: 'normal' | 'abnormal';
+  abnormalReasons: string[];
+  resolved?: ResolvedNodeContext;
+}
+
+function appendCore(
+  input: TemperatureEvidenceInput,
+  batchId: string
+): AppendCoreResult {
+  const readingKey = asString(input.readingKey, 'readingKey');
+  const rawPayload = input.rawPayload;
+  if (typeof rawPayload !== 'object' || rawPayload === null || Array.isArray(rawPayload)) {
+    throw new LedgerValidationError('rawPayload', 'rawPayload 必须是对象');
+  }
+
+  const temperatureCelsius = asNumber(input.temperatureCelsius, 'temperatureCelsius');
+  const observedAt = parseObservedAt(input.observedAt, input.source);
+  const receivedAt = new Date().toISOString();
+
+  const temperatureCenti = celsiusToCenti(temperatureCelsius);
+
+  let nodeId = input.nodeId;
+  let taskId = input.taskId;
+  let orderId = input.orderId;
+  let order: Order | undefined;
+  const nodeType = input.nodeType;
+
+  if (nodeId) {
+    const resolved = resolveNodeById(nodeId);
+    if (resolved) {
+      nodeId = resolved.nodeId;
+      taskId = resolved.taskId;
+      orderId = resolved.orderId;
+      order = resolved.order;
+    }
+  } else if (input.orderNo && nodeType) {
+    const resolved = resolveNodeByOrderAndType(input.orderNo, nodeType);
+    if (resolved) {
+      nodeId = resolved.nodeId;
+      taskId = resolved.taskId;
+      orderId = resolved.orderId;
+      order = resolved.order;
+    }
+  }
+
+  const standardizedHash = computeStandardizedPayloadHash({
+    source: input.source,
+    readingKey,
+    temperatureCenti,
+    observedAt,
+    nodeId: nodeId ?? null,
+    taskId: taskId ?? null,
+    orderId: orderId ?? null,
+    nodeType: nodeType ?? null,
+    orderNo: input.orderNo ?? null,
+  });
+
+  const existing = temperatureEvidenceRepository.findByReadingKey(readingKey);
+  if (existing) {
+    if (existing.payloadHash === standardizedHash) {
+      return {
+        evidence: existing,
+        idempotent: true,
+        judgment: existing.judgment,
+        abnormalReasons: existing.abnormalReasons,
+        resolved: order ? { nodeId: nodeId!, taskId: taskId!, orderId: orderId!, order } : undefined,
+      };
+    }
+    throw new LedgerConflictError(existing, standardizedHash);
+  }
+
+  const rawPayloadString = JSON.stringify(buildStandardizedPayload({
+    source: input.source,
+    readingKey,
+    temperatureCenti,
+    observedAt,
+    nodeId: nodeId ?? null,
+    taskId: taskId ?? null,
+    orderId: orderId ?? null,
+    nodeType: nodeType ?? null,
+    orderNo: input.orderNo ?? null,
+  }));
+
+  const judgment = order
+    ? judgeTemperature(temperatureCelsius, order)
+    : { judgment: 'normal' as const, reasons: [] as string[], minTemp: undefined, maxTemp: undefined };
+
+  const record: CreateEvidenceRecord = {
+    batchId,
+    source: input.source,
+    readingKey,
+    payloadHash: standardizedHash,
+    rawPayload: rawPayloadString,
+    temperatureCenti,
+    observedAt,
+    receivedAt,
+    nodeId,
+    taskId,
+    orderId,
+    nodeType,
+    orderNo: input.orderNo,
+    locationText: input.locationText,
+    operatorName: input.operatorName,
+    judgment: judgment.judgment,
+    abnormalReasons: judgment.reasons,
+    minTemp: judgment.minTemp,
+    maxTemp: judgment.maxTemp,
+    temperatureZone: order?.temperatureZone,
+  };
+
+  const evidence = temperatureEvidenceRepository.append(record);
+  return {
+    evidence,
+    idempotent: false,
+    judgment: judgment.judgment,
+    abnormalReasons: judgment.reasons,
+    resolved: order ? { nodeId: nodeId!, taskId: taskId!, orderId: orderId!, order } : undefined,
+  };
+}
+
+function ensureExceptionWorkorder(
+  nodeId: string,
+  taskId: string,
+  orderId: string,
+  driverId: string,
+  temperatureZone: Order['temperatureZone'],
+  exceptionDescription: string,
+  exceptionTime: string
+): void {
+  const existing = exceptionHandlingRepository.findByNodeId(nodeId);
+  if (existing) {
+    return;
+  }
+  exceptionHandlingRepository.createHandling({
+    nodeId,
+    taskId,
+    orderId,
+    driverId,
+    temperatureZone,
+    exceptionDescription,
+    exceptionTime,
+    handlingStatus: 'pending',
+  });
+}
+
+const NODE_TYPE_TO_ORDER_STATUS: Readonly<Record<NodeType, 'warehoused' | 'loading' | 'in_transit' | 'delivered' | 'completed'>> = {
+  warehouse_in: 'warehoused',
+  loading: 'loading',
+  departure: 'in_transit',
+  arrival: 'in_transit',
+  delivery: 'delivered',
+  signature: 'completed',
+};
+
+function propagateNodeCompletion(taskId: string, nodeType: NodeType, isException: boolean): void {
+  const task = taskRepository.findById(taskId);
+  if (!task) return;
+
+  if (isException) {
+    taskRepository.updateStatus(taskId, 'in_transit');
+    orderRepository.updateStatus(task.orderId, 'in_transit');
+    return;
+  }
+
+  const newStatus = NODE_TYPE_TO_ORDER_STATUS[nodeType];
+  if (newStatus) {
+    taskRepository.updateStatus(taskId, newStatus);
+    orderRepository.updateStatus(task.orderId, newStatus);
+  }
+
+  const allNodes = nodeRepository.findByTaskId(taskId);
+  const completedNodes = allNodes.filter(n => n.status === 'completed');
+  const hasException = allNodes.some(n => n.status === 'exception');
+  if (completedNodes.length === allNodes.length && !hasException) {
+    taskRepository.updateStatus(taskId, 'completed');
+    orderRepository.updateStatus(task.orderId, 'completed');
+  }
+}
+
 export const temperatureLedgerService = {
   generateBatchId(): string {
     return `ev-${randomUUID()}`;
@@ -309,80 +494,129 @@ export const temperatureLedgerService = {
     input: TemperatureEvidenceInput,
     batchId?: string
   ): { evidence: TemperatureEvidence; idempotent: boolean } {
-    const readingKey = asString(input.readingKey, 'readingKey');
-    const rawPayload = input.rawPayload;
-    if (typeof rawPayload !== 'object' || rawPayload === null || Array.isArray(rawPayload)) {
-      throw new LedgerValidationError('rawPayload', 'rawPayload 必须是对象');
+    const result = appendCore(input, batchId ?? this.generateBatchId());
+    return { evidence: result.evidence, idempotent: result.idempotent };
+  },
+
+  recordForNode(input: NodeEvidenceInput): NodeEvidenceOutcome {
+    const resolved = resolveNodeById(input.nodeId);
+    if (!resolved) {
+      throw new LedgerValidationError('nodeId', `节点不存在: ${input.nodeId}`);
     }
+    const { nodeId, taskId, orderId, order } = resolved;
 
-    const temperatureCelsius = asNumber(input.temperatureCelsius, 'temperatureCelsius');
-    const observedAt = parseObservedAt(input.observedAt, input.source);
-    const receivedAt = normalizeReceivedAt(input.receivedAt);
-
-    const payloadHash = computePayloadHash(rawPayload);
-    const temperatureCenti = celsiusToCenti(temperatureCelsius);
-
-    const existing = temperatureEvidenceRepository.findByReadingKey(readingKey);
-    if (existing) {
-      if (existing.payloadHash === payloadHash) {
-        return { evidence: existing, idempotent: true };
-      }
-      throw new LedgerConflictError(existing, payloadHash);
-    }
-
-    let nodeId = input.nodeId;
-    let taskId = input.taskId;
-    let orderId = input.orderId;
-    let order: Order | undefined;
-    const nodeType = input.nodeType;
-
-    if (nodeId) {
-      const resolved = resolveNodeById(nodeId);
-      if (resolved) {
-        nodeId = resolved.nodeId;
-        taskId = resolved.taskId;
-        orderId = resolved.orderId;
-        order = resolved.order;
-      }
-    } else if (input.orderNo && nodeType) {
-      const resolved = resolveNodeByOrderAndType(input.orderNo, nodeType);
-      if (resolved) {
-        nodeId = resolved.nodeId;
-        taskId = resolved.taskId;
-        orderId = resolved.orderId;
-        order = resolved.order;
+    if (input.temperatureCelsius === undefined || input.temperatureCelsius === null) {
+      const node = nodeRepository.findById(nodeId);
+      if (node?.temperature === undefined || node.temperature === null) {
+        throw new LedgerValidationError('temperatureCelsius', '温度值不能为空');
       }
     }
+    const temperatureCelsius = input.temperatureCelsius ?? nodeRepository.findById(nodeId)!.temperature!;
 
-    const judgment = order
-      ? judgeTemperature(temperatureCelsius, order)
-      : { judgment: 'normal' as const, reasons: [] as string[], minTemp: undefined, maxTemp: undefined };
+    const observedAtRaw = input.observedAt ?? new Date().toISOString();
+    if (input.source === 'driver_offline') {
+      parseObservedAt(observedAtRaw, 'driver_offline');
+    }
+    const observedAt = parseObservedAt(observedAtRaw, input.source);
 
-    const record: CreateEvidenceRecord = {
-      batchId: batchId ?? this.generateBatchId(),
-      source: input.source,
-      readingKey,
-      payloadHash,
-      rawPayload: canonicalizePayload(rawPayload),
-      temperatureCenti,
-      observedAt,
-      receivedAt,
+    const rawPayload: Record<string, unknown> = {
+      ...input.rawPayload,
       nodeId,
       taskId,
       orderId,
-      nodeType,
-      orderNo: input.orderNo,
-      locationText: input.locationText,
-      operatorName: input.operatorName,
-      judgment: judgment.judgment,
-      abnormalReasons: judgment.reasons,
-      minTemp: judgment.minTemp,
-      maxTemp: judgment.maxTemp,
-      temperatureZone: order?.temperatureZone,
+      nodeType: input.nodeType ?? nodeRepository.findById(nodeId)?.nodeType,
+      temperature: temperatureCelsius,
+      observedAt,
+      locationText: input.locationText ?? null,
+      operatorName: input.operatorName ?? null,
+      exceptionDescription: input.exceptionDescription ?? null,
+      clientSubmitId: input.clientSubmitId ?? null,
     };
 
-    const evidence = temperatureEvidenceRepository.append(record);
-    return { evidence, idempotent: false };
+    let outcome: AppendCoreResult;
+    try {
+      outcome = appendCore(
+        {
+          source: input.source,
+          readingKey: input.readingKey,
+          rawPayload,
+          temperatureCelsius,
+          observedAt,
+          nodeId,
+          taskId,
+          orderId,
+          nodeType: input.nodeType,
+          orderNo: order.orderNo,
+          locationText: input.locationText,
+          operatorName: input.operatorName,
+        },
+        this.generateBatchId()
+      );
+    } catch (error) {
+      if (error instanceof LedgerConflictError) {
+        return {
+          status: 'conflict',
+          existingEvidence: error.existingEvidence,
+          submittedStandardizedHash: error.submittedPayloadHash,
+          message: error.message,
+        };
+      }
+      throw error;
+    }
+
+    const { evidence, idempotent, judgment, abnormalReasons } = outcome;
+
+    if (idempotent) {
+      return { status: 'idempotent', evidence, judgment, abnormalReasons };
+    }
+
+    const node = nodeRepository.findById(nodeId);
+    if (!node) {
+      return { status: 'created', evidence, judgment, abnormalReasons };
+    }
+
+    const isAlreadyException = node.status === 'exception' || exceptionHandlingRepository.findByNodeId(nodeId) !== undefined;
+
+    if (judgment === 'abnormal' || input.exceptionDescription) {
+      const exceptionDescription = input.exceptionDescription && input.exceptionDescription.trim() !== ''
+        ? input.exceptionDescription
+        : abnormalReasons.join('; ');
+
+      nodeRepository.completeNode(nodeId, {
+        locationText: input.locationText ?? node.locationText,
+        temperature: temperatureCelsius,
+        exceptionDescription: exceptionDescription || '温度异常',
+        recordedAt: observedAt,
+      });
+
+      propagateNodeCompletion(taskId, node.nodeType, true);
+
+      ensureExceptionWorkorder(
+        nodeId,
+        taskId,
+        orderId,
+        taskRepository.findById(taskId)?.driverId ?? '',
+        order.temperatureZone,
+        exceptionDescription || '温度异常',
+        observedAt
+      );
+    } else {
+      if (isAlreadyException) {
+        nodeRepository.updateNode(nodeId, {
+          temperature: temperatureCelsius,
+          recordedAt: observedAt,
+        });
+      } else {
+        nodeRepository.completeNode(nodeId, {
+          locationText: input.locationText ?? node.locationText,
+          temperature: temperatureCelsius,
+          recordedAt: observedAt,
+        });
+        propagateNodeCompletion(taskId, node.nodeType, false);
+      }
+    }
+
+    return { status: 'created', evidence, judgment, abnormalReasons };
   },
 
   appendDriverOffline(readings: DriverOfflineReading[]): EvidenceBatchCreateResult {
@@ -401,6 +635,10 @@ export const temperatureLedgerService = {
         asNodeType(reading.nodeType, 'nodeType');
         parseObservedAt(reading.observedAt, 'driver_offline');
 
+        const node = nodeRepository.findById(reading.nodeId);
+        const task = taskRepository.findById(reading.taskId);
+        const order = task ? orderRepository.findById(task.orderId) : undefined;
+
         const rawPayload: Record<string, unknown> = {
           readingKey: reading.readingKey,
           nodeId: reading.nodeId,
@@ -414,47 +652,44 @@ export const temperatureLedgerService = {
           clientSubmitId: reading.clientSubmitId ?? null,
         };
 
-        const { evidence, idempotent: isIdempotent } = this.append(
-          {
-            source: 'driver_offline',
-            readingKey: reading.readingKey,
-            rawPayload,
-            temperatureCelsius: reading.temperature,
-            observedAt: reading.observedAt,
-            nodeId: reading.nodeId,
-            taskId: reading.taskId,
-            orderId: reading.orderId,
-            nodeType: reading.nodeType,
-            locationText: reading.locationText,
-            operatorName: reading.operatorName,
-          },
-          batchId
-        );
+        const outcome = this.recordForNode({
+          source: 'driver_offline',
+          readingKey: reading.readingKey,
+          rawPayload,
+          nodeId: reading.nodeId,
+          taskId: reading.taskId,
+          orderId: reading.orderId ?? order?.id,
+          nodeType: reading.nodeType,
+          orderNo: order?.orderNo,
+          temperatureCelsius: reading.temperature,
+          observedAt: reading.observedAt,
+          locationText: reading.locationText ?? node?.locationText,
+          operatorName: reading.operatorName ?? node?.operatorName,
+          clientSubmitId: reading.clientSubmitId,
+        });
 
-        if (isIdempotent) {
-          idempotent++;
-          results.push({ readingKey: reading.readingKey, status: 'idempotent', evidenceId: evidence.id, message: '幂等成功（载荷相同）' });
-        } else {
-          success++;
-          results.push({ readingKey: reading.readingKey, status: 'created', evidenceId: evidence.id, message: '已入账' });
-        }
-      } catch (error) {
-        if (error instanceof LedgerConflictError) {
+        if (outcome.status === 'conflict') {
           conflict++;
           results.push({
             readingKey: reading.readingKey,
             status: 'conflict',
-            conflictEvidence: error.existingEvidence,
-            message: error.message,
+            conflictEvidence: outcome.existingEvidence,
+            message: outcome.message,
           });
+        } else if (outcome.status === 'idempotent') {
+          idempotent++;
+          results.push({ readingKey: reading.readingKey, status: 'idempotent', evidenceId: outcome.evidence.id, message: '幂等成功（标准化载荷相同）' });
         } else {
-          failed++;
-          results.push({
-            readingKey: reading.readingKey,
-            status: 'failed',
-            message: error instanceof Error ? error.message : '未知错误',
-          });
+          success++;
+          results.push({ readingKey: reading.readingKey, status: 'created', evidenceId: outcome.evidence.id, message: '已入账' });
         }
+      } catch (error) {
+        failed++;
+        results.push({
+          readingKey: reading.readingKey,
+          status: 'failed',
+          message: error instanceof Error ? error.message : '未知错误',
+        });
       }
     }
 
@@ -477,6 +712,11 @@ export const temperatureLedgerService = {
         asNodeType(reading.nodeType, 'nodeType');
         parseObservedAt(reading.observedAt, 'historical_backfill');
 
+        const resolved = resolveNodeByOrderAndType(reading.orderNo, reading.nodeType);
+        if (!resolved) {
+          throw new LedgerValidationError('node', `未找到订单 ${reading.orderNo} 的 ${reading.nodeType} 节点`);
+        }
+
         const rawPayload: Record<string, unknown> = {
           readingKey: reading.readingKey,
           orderNo: reading.orderNo,
@@ -496,6 +736,9 @@ export const temperatureLedgerService = {
             observedAt: reading.observedAt,
             orderNo: reading.orderNo,
             nodeType: reading.nodeType,
+            nodeId: resolved.nodeId,
+            taskId: resolved.taskId,
+            orderId: resolved.orderId,
             locationText: reading.locationText,
             operatorName: reading.operatorName,
           },
@@ -504,7 +747,7 @@ export const temperatureLedgerService = {
 
         if (isIdempotent) {
           idempotent++;
-          results.push({ readingKey: reading.readingKey, status: 'idempotent', evidenceId: evidence.id, message: '幂等成功（载荷相同）' });
+          results.push({ readingKey: reading.readingKey, status: 'idempotent', evidenceId: evidence.id, message: '幂等成功（标准化载荷相同）' });
         } else {
           success++;
           results.push({ readingKey: reading.readingKey, status: 'created', evidenceId: evidence.id, message: '已入账' });
@@ -532,6 +775,84 @@ export const temperatureLedgerService = {
     return { batchId, total: readings.length, success, idempotent, conflict, failed, results };
   },
 
+  backfillFromExistingNodes(batchId?: string): EvidenceBatchCreateResult {
+    const effectiveBatchId = batchId ?? this.generateBatchId();
+    const results: EvidenceBatchItemResult[] = [];
+    let success = 0;
+    let idempotent = 0;
+    let conflict = 0;
+    let failed = 0;
+
+    const nodes = nodeRepository.findByStatus('completed')
+      .concat(nodeRepository.findByStatus('exception'));
+
+    const seen = new Set<string>();
+    for (const node of nodes) {
+      if (seen.has(node.id)) continue;
+      seen.add(node.id);
+
+      if (node.temperature === undefined || node.temperature === null) continue;
+
+      const task = taskRepository.findById(node.taskId);
+      const order = task ? orderRepository.findById(task.orderId) : undefined;
+      if (!task || !order) continue;
+
+      const observedAt = node.recordedAt || node.createdAt || new Date().toISOString();
+      const readingKey = `backfill:${node.id}:${observedAt}`;
+
+      const rawPayload: Record<string, unknown> = {
+        nodeId: node.id,
+        taskId: task.id,
+        orderId: order.id,
+        orderNo: order.orderNo,
+        nodeType: node.nodeType,
+        temperature: node.temperature,
+        observedAt,
+        locationText: node.locationText ?? null,
+        operatorName: node.operatorName ?? null,
+        fromExistingNode: true,
+      };
+
+      try {
+        const { evidence, idempotent: isIdempotent } = this.append(
+          {
+            source: 'historical_backfill',
+            readingKey,
+            rawPayload,
+            temperatureCelsius: node.temperature,
+            observedAt,
+            nodeId: node.id,
+            taskId: task.id,
+            orderId: order.id,
+            nodeType: node.nodeType,
+            orderNo: order.orderNo,
+            locationText: node.locationText,
+            operatorName: node.operatorName,
+          },
+          effectiveBatchId
+        );
+
+        if (isIdempotent) {
+          idempotent++;
+          results.push({ readingKey, status: 'idempotent', evidenceId: evidence.id, message: '幂等成功' });
+        } else {
+          success++;
+          results.push({ readingKey, status: 'created', evidenceId: evidence.id, message: '已回填' });
+        }
+      } catch (error) {
+        if (error instanceof LedgerConflictError) {
+          conflict++;
+          results.push({ readingKey, status: 'conflict', conflictEvidence: error.existingEvidence, message: error.message });
+        } else {
+          failed++;
+          results.push({ readingKey, status: 'failed', message: error instanceof Error ? error.message : '未知错误' });
+        }
+      }
+    }
+
+    return { batchId: effectiveBatchId, total: results.length, success, idempotent, conflict, failed, results };
+  },
+
   importCsv(csvText: string): EvidenceBatchCreateResult {
     const parsedRows = parseCsvToEvidenceInputs(csvText);
     const batchId = this.generateBatchId();
@@ -543,7 +864,16 @@ export const temperatureLedgerService = {
 
     for (const row of parsedRows) {
       try {
-        const { evidence, idempotent: isIdempotent } = this.append(
+        const resolved = resolveNodeByOrderAndType(row.orderNo, row.nodeType);
+        if (!resolved) {
+          throw new LedgerValidationError('node', `未找到订单 ${row.orderNo} 的 ${row.nodeType} 节点`);
+        }
+
+        const { nodeId, taskId, orderId, order } = resolved;
+        const node = nodeRepository.findById(nodeId);
+        const existingException = exceptionHandlingRepository.findByNodeId(nodeId);
+
+        const { evidence, idempotent: isIdempotent, judgment, abnormalReasons } = appendCore(
           {
             source: 'csv_import',
             readingKey: row.readingKey,
@@ -552,6 +882,9 @@ export const temperatureLedgerService = {
             observedAt: row.observedAt,
             orderNo: row.orderNo,
             nodeType: row.nodeType,
+            nodeId,
+            taskId,
+            orderId,
             locationText: row.locationText,
             operatorName: row.operatorName,
           },
@@ -564,17 +897,54 @@ export const temperatureLedgerService = {
             readingKey: row.readingKey,
             status: 'idempotent',
             evidenceId: evidence.id,
-            message: `第${row.lineNumber}行幂等成功（载荷相同）`,
+            message: `第${row.lineNumber}行幂等成功（标准化载荷相同）`,
           });
-        } else {
-          success++;
-          results.push({
-            readingKey: row.readingKey,
-            status: 'created',
-            evidenceId: evidence.id,
-            message: `第${row.lineNumber}行已入账`,
-          });
+          continue;
         }
+
+        if (judgment === 'abnormal') {
+          const exceptionDesc = abnormalReasons.join('; ');
+          nodeRepository.completeNode(nodeId, {
+            locationText: row.locationText ?? node?.locationText ?? '',
+            temperature: row.temperatureCelsius,
+            exceptionDescription: exceptionDesc,
+            recordedAt: row.observedAt,
+          });
+          propagateNodeCompletion(taskId, row.nodeType, true);
+          if (!existingException) {
+            ensureExceptionWorkorder(
+              nodeId,
+              taskId,
+              orderId,
+              taskRepository.findById(taskId)?.driverId ?? '',
+              order.temperatureZone,
+              exceptionDesc,
+              row.observedAt
+            );
+          }
+        } else {
+          if (node?.status === 'exception' || existingException) {
+            nodeRepository.updateNode(nodeId, {
+              temperature: row.temperatureCelsius,
+              recordedAt: row.observedAt,
+            });
+          } else {
+            nodeRepository.completeNode(nodeId, {
+              locationText: row.locationText ?? node?.locationText ?? '',
+              temperature: row.temperatureCelsius,
+              recordedAt: row.observedAt,
+            });
+            propagateNodeCompletion(taskId, row.nodeType, false);
+          }
+        }
+
+        success++;
+        results.push({
+          readingKey: row.readingKey,
+          status: 'created',
+          evidenceId: evidence.id,
+          message: `第${row.lineNumber}行已入账（${judgment === 'abnormal' ? '温度异常，已创建/保留工单' : '正常'}）`,
+        });
       } catch (error) {
         if (error instanceof LedgerConflictError) {
           conflict++;
