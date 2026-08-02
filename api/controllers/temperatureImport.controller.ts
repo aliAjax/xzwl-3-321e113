@@ -52,12 +52,16 @@ export const temperatureImportController = {
       }
 
       const result = temperatureImportService.executeImport(records as TemperatureRecordValidationResult[], operator);
-      return res.status(200).json({
-        message: '导入完成',
+      const conflictCount = result.conflictCount ?? 0;
+      // 存在温度证据冲突时，按 409 语义返回，且携带 conflictCount。
+      const statusCode = conflictCount > 0 ? 409 : 200;
+      return res.status(statusCode).json({
+        message: conflictCount > 0 ? '导入完成，但存在温度证据冲突' : '导入完成',
         successCount: result.successCount,
         failedCount: result.failedCount,
         skippedCount: result.skippedCount,
         exceptionCreatedCount: result.exceptionCreatedCount,
+        conflictCount,
         results: result.results,
       });
     } catch (error) {

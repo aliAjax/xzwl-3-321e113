@@ -173,32 +173,28 @@ function generateId(): string {
 
 /**
  * 让异常证据进入工单判定。
- * - 该节点尚无工单时创建一条 pending 工单（异常证据触发）。
- * - 已存在工单时只追加处理记录，不修改/关闭已有工单，
- *   保证较新的正常温度或后续异常都不会掩盖或自动关闭旧异常。
+ * - 该节点尚无工单时创建一条 pending 工单（异常证据触发），返回工单 id。
+ * - 已存在工单时不做任何写入（无副作用），返回既有工单 id。
+ *   —— 只追加不覆盖：较新的正常温度、重复上报都不会改动既有工单。
  */
 function ensureExceptionWorkorder(
   evidence: TemperatureEvidence,
   node: DeliveryNode,
   order: Order
-): void {
+): string | undefined {
   const task = taskRepository.findById(node.taskId);
-  if (!task) return;
-
-  const description = `温度证据异常：${centiToCelsius(evidence.temperatureCenti)}°C 超出要求 ${order.minTemp}~${order.maxTemp}°C（来源：${evidence.source}，readingKey：${evidence.readingKey}）`;
+  if (!task) return undefined;
 
   const existing = exceptionHandlingRepository.findByNodeId(node.id);
   if (existing) {
-    // 只追加：记录该异常证据，不覆盖既有工单状态。
-    exceptionHandlingRepository.addProcessingNote(
-      existing.id,
-      description,
-      'add_note',
-      undefined,
-      '系统（温度证据账本）'
-    );
-    return;
+    // 幂等：已有工单则直接复用，不追加处理记录、不修改状态。
+    return existing.id;
   }
+
+  // 允许调用方（如 CSV 导入）透传更贴合业务的异常描述；否则使用账本默认描述。
+  const overrideDesc = readPayloadString(evidence, 'exceptionDescription');
+  const description = overrideDesc
+    || `温度证据异常：${centiToCelsius(evidence.temperatureCenti)}°C 超出要求 ${order.minTemp}~${order.maxTemp}°C（来源：${evidence.source}，readingKey：${evidence.readingKey}）`;
 
   const handling = exceptionHandlingRepository.createHandling({
     id: generateId(),
@@ -219,23 +215,21 @@ function ensureExceptionWorkorder(
     undefined,
     '系统（温度证据账本）'
   );
+
+  return handling.id;
 }
 
 /**
  * 承接一批温度证据（司机离线 / CSV 导入 / 历史回填共用）。
  * 只追加不覆盖；幂等成功、冲突返回 409 语义，禁止强制覆盖。
  *
- * manageWorkorder：
- * - true（默认，账本自有入口 /ingest、/driver-offline）：证据与异常工单在同一事务内
- *   创建/关联，保证一致性。
- * - false（现有页面入口经 recordNodeEvidence 复用）：仅登记证据并返回冲突信息，
- *   工单仍由既有链路自行创建，避免与其重复建单。
+ * 一致性：每条新证据的写入与其异常工单的创建/关联在同一事务内完成；
+ * 当本调用嵌套在外层事务（旧入口的节点更新事务）中时，会自动降级为
+ * SAVEPOINT，从而与节点更新一起原子提交或回滚。
  */
 function ingest(
-  request: TemperatureEvidenceIngestRequest,
-  options: { manageWorkorder?: boolean } = {}
+  request: TemperatureEvidenceIngestRequest
 ): TemperatureEvidenceIngestResult {
-  const manageWorkorder = options.manageWorkorder ?? true;
   const source = request.source;
   const batchId = request.batchId || `${source}-${randomUUID()}`;
   const receivedAt = new Date().toISOString();
@@ -289,20 +283,17 @@ function ingest(
     const existing = temperatureEvidenceRepository.findByReadingKey(readingKey);
     if (existing) {
       if (existing.contentHash === contentHash) {
-        // 相同 readingKey 且相同标准化载荷视为幂等成功。
-        // 幂等补偿：若该异常证据此前因故障没有成功建单，则在此补建，
-        // 避免异常证据永久缺少对应工单。
-        if (manageWorkorder && existing.isAbnormal && context.node && context.order) {
-          temperatureEvidenceRepository.runInTransaction(() => {
-            ensureExceptionWorkorder(existing, context.node!, context.order!);
-          });
-        }
+        // 相同 readingKey 且相同标准化载荷视为幂等成功，且完全无副作用：
+        // 不重复写证据、不追加处理记录、不改动既有工单。
         duplicateCount++;
         outcomes.push({
           readingKey,
           status: 'duplicate',
           evidenceId: existing.id,
           isAbnormal: existing.isAbnormal,
+          exceptionId: existing.isAbnormal && existing.nodeId
+            ? exceptionHandlingRepository.findByNodeId(existing.nodeId)?.id
+            : undefined,
           message: '重复上报，幂等成功',
         });
       } else {
@@ -322,7 +313,8 @@ function ingest(
 
     // 一致性：证据写入与工单创建/关联在同一事务内完成。
     // 任一失败都整体回滚，不会留下“证据存在但工单缺失”的状态。
-    const evidence = temperatureEvidenceRepository.runInTransaction(() => {
+    // 若已处于外层事务，better-sqlite3 会自动以 SAVEPOINT 方式嵌套。
+    const { evidence, exceptionId } = temperatureEvidenceRepository.runInTransaction(() => {
       const appended = temperatureEvidenceRepository.append({
         id: randomUUID(),
         batchId,
@@ -344,11 +336,12 @@ function ingest(
 
       // 每条异常证据都参与工单判定：为异常证据创建/关联异常工单。
       // 只追加不覆盖——较新的正常温度不会关闭已存在的工单。
-      if (manageWorkorder && isAbnormal && context.node && context.order) {
-        ensureExceptionWorkorder(appended, context.node, context.order);
+      let createdExceptionId: string | undefined;
+      if (isAbnormal && context.node && context.order) {
+        createdExceptionId = ensureExceptionWorkorder(appended, context.node, context.order);
       }
 
-      return appended;
+      return { evidence: appended, exceptionId: createdExceptionId };
     });
 
     createdCount++;
@@ -357,6 +350,7 @@ function ingest(
       status: 'created',
       evidenceId: evidence.id,
       isAbnormal,
+      exceptionId,
       message: isAbnormal ? '已记录（温度异常）' : '已记录',
     });
   }
@@ -376,9 +370,9 @@ function ingest(
 
 /**
  * 供现有入口（司机节点上报 / CSV 导入执行）复用的单条证据登记。
- * 现有页面调用链在更新 delivery_nodes 的同时，同步向账本追加一条证据，
- * 使真实请求也能落入 temperature_evidence 并进入工单判定。
- * 返回 ingest 结果，调用方据此感知冲突（不能吞掉 409）。
+ * 账本统一负责“写证据 + 建/关联异常工单”，二者在同一事务内完成；
+ * 调用方应把本调用与自身的节点更新放进同一外层事务，实现整体原子性。
+ * 返回 ingest 结果，调用方据此感知冲突（不能吞掉 409）与工单 id。
  */
 function recordNodeEvidence(params: {
   source: TemperatureEvidenceSource;
@@ -391,29 +385,31 @@ function recordNodeEvidence(params: {
   batchId?: string;
   locationText?: string;
   operatorName?: string;
+  exceptionDescription?: string;
 }): TemperatureEvidenceIngestResult {
-  return ingest(
-    {
-      batchId: params.batchId,
-      source: params.source,
-      items: [
-        {
-          // readingKey 以节点+采集时刻构造，保证同一节点重复同步幂等。
-          readingKey: `${params.source}:node:${params.nodeId}:${params.observedAt}`,
-          observedAt: params.observedAt,
-          temperature: params.temperature,
-          orderId: params.orderId,
-          taskId: params.taskId,
-          nodeId: params.nodeId,
-          nodeType: params.nodeType,
-          locationText: params.locationText,
-          operatorName: params.operatorName,
-        },
-      ],
-    },
-    // 现有链路自行建单，账本仅登记证据并回传冲突。
-    { manageWorkorder: false }
-  );
+  const rawPayload: TemperatureEvidenceRawPayload = {};
+  if (params.exceptionDescription !== undefined) {
+    rawPayload.exceptionDescription = params.exceptionDescription;
+  }
+  return ingest({
+    batchId: params.batchId,
+    source: params.source,
+    items: [
+      {
+        // readingKey 以节点+采集时刻构造，保证同一节点重复同步幂等。
+        readingKey: `${params.source}:node:${params.nodeId}:${params.observedAt}`,
+        observedAt: params.observedAt,
+        temperature: params.temperature,
+        orderId: params.orderId,
+        taskId: params.taskId,
+        nodeId: params.nodeId,
+        nodeType: params.nodeType,
+        locationText: params.locationText,
+        operatorName: params.operatorName,
+        rawPayload: Object.keys(rawPayload).length > 0 ? rawPayload : undefined,
+      },
+    ],
+  });
 }
 
 const nodeTypeMap: Record<string, NodeType> = {

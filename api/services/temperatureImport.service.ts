@@ -1,7 +1,7 @@
 import { orderRepository } from '../repositories/order.repository';
 import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
-import { exceptionHandlingRepository } from '../repositories/exception.repository';
+import { temperatureEvidenceRepository } from '../repositories/temperatureEvidence.repository';
 import { deliveryService } from './delivery.service';
 import { temperatureEvidenceService } from './temperatureEvidence.service';
 import type {
@@ -21,9 +21,6 @@ import type {
   TemperatureRecordFieldKey,
 } from '../../shared/types';
 
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
 
 const nodeTypeMap: Record<string, NodeType> = {
   '入库': 'warehouse_in',
@@ -467,22 +464,75 @@ function executeImport(
     const { node, task, order } = matched;
 
     try {
-      // 先登记温度证据账本：账本是唯一可审计的真值来源。
-      // 若同一 readingKey 已有不同标准化载荷，返回冲突，
-      // 此时不再更新节点、不建工单，避免旧入口吞掉 409。
-      const evidenceResult = temperatureEvidenceService.recordNodeEvidence({
-        source: 'csv_import',
-        orderId: order.id,
-        taskId: task.id,
-        nodeId: node.id,
-        nodeType: node.nodeType,
-        temperature: parsed.temperature!,
-        observedAt: parsed.recordedAt!.toISOString(),
-        locationText: parsed.locationText,
-        operatorName: parsed.operatorName,
+      // 一致性：节点更新、温度证据登记、异常工单创建在同一事务内完成。
+      // - 账本冲突（同 readingKey 不同载荷）：抛出哨兵 → 回滚，节点不变、不建工单，判为冲突。
+      // - 事务内任一步骤失败：整体回滚，不会出现“节点已变、证据/工单缺失”的中间态。
+      const isAbnormal = record.status === 'abnormal';
+      const exceptionDesc = isAbnormal ? record.failureReasons.join('; ') : undefined;
+
+      const outcome = temperatureEvidenceRepository.runInTransaction((): { exceptionId?: string } => {
+        nodeRepository.completeNode(node.id, {
+          locationText: parsed.locationText,
+          temperature: parsed.temperature!,
+          exceptionDescription: exceptionDesc,
+          recordedAt: parsed.recordedAt!.toISOString(),
+        });
+
+        deliveryService.updateOrderStatusFromNode(
+          task.id,
+          node.nodeType,
+          isAbnormal ? 'exception' : 'completed'
+        );
+
+        // 账本统一负责“写证据 + 建/关联异常工单”。
+        const evidenceResult = temperatureEvidenceService.recordNodeEvidence({
+          source: 'csv_import',
+          orderId: order.id,
+          taskId: task.id,
+          nodeId: node.id,
+          nodeType: node.nodeType,
+          temperature: parsed.temperature!,
+          observedAt: parsed.recordedAt!.toISOString(),
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName,
+          exceptionDescription: exceptionDesc,
+        });
+
+        if (evidenceResult.hasConflict) {
+          throw { kind: 'evidence_conflict' };
+        }
+
+        return { exceptionId: evidenceResult.outcomes[0]?.exceptionId };
       });
 
-      if (evidenceResult.hasConflict) {
+      if (isAbnormal) {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: true,
+          isException: true,
+          isSkipped: false,
+          nodeId: node.id,
+          exceptionId: outcome.exceptionId,
+          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
+        });
+        successCount++;
+        exceptionCreatedCount++;
+      } else {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: true,
+          isException: false,
+          isSkipped: false,
+          nodeId: node.id,
+          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
+        });
+        successCount++;
+      }
+    } catch (error) {
+      const failure = error as { kind?: string };
+      if (failure && failure.kind === 'evidence_conflict') {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -496,65 +546,6 @@ function executeImport(
         conflictCount++;
         continue;
       }
-
-      if (record.status === 'importable') {
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
-
-        results.push({
-          lineNumber: record.lineNumber,
-          orderNo: parsed.orderNo,
-          success: true,
-          isException: false,
-          isSkipped: false,
-          nodeId: node.id,
-          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
-        });
-        successCount++;
-      } else if (record.status === 'abnormal') {
-        const exceptionDesc = record.failureReasons.join('; ');
-
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
-
-        const exceptionId = generateId();
-        exceptionHandlingRepository.createHandling({
-          id: exceptionId,
-          nodeId: node.id,
-          taskId: task.id,
-          orderId: order.id,
-          driverId: task.driverId,
-          temperatureZone: order.temperatureZone,
-          exceptionDescription: exceptionDesc,
-          exceptionTime: parsed.recordedAt!.toISOString(),
-          handlingStatus: 'pending',
-        });
-
-        results.push({
-          lineNumber: record.lineNumber,
-          orderNo: parsed.orderNo,
-          success: true,
-          isException: true,
-          isSkipped: false,
-          nodeId: node.id,
-          exceptionId,
-          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
-        });
-        successCount++;
-        exceptionCreatedCount++;
-      }
-    } catch (error) {
       results.push({
         lineNumber: record.lineNumber,
         orderNo: parsed.orderNo,

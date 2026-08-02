@@ -896,6 +896,7 @@ export interface TemperatureEvidenceIngestOutcome {
   status: TemperatureEvidenceIngestStatus;
   evidenceId?: string;
   isAbnormal?: boolean;
+  exceptionId?: string;
   message: string;
 }
 
