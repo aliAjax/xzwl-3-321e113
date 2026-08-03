@@ -10,6 +10,7 @@ import { nodeRepository } from '../api/repositories/node.repository';
 import { exceptionHandlingRepository } from '../api/repositories/exception.repository';
 import { processingNoteRepository } from '../api/repositories/processing-notes.repository';
 import { customerRepository } from '../api/repositories/customer.repository';
+import { temperatureEvidenceRepository } from '../api/repositories/temperatureEvidence.repository';
 import { temperatureImportService } from '../api/services/temperatureImport.service';
 import { deliveryService } from '../api/services/delivery.service';
 import type {
@@ -181,9 +182,45 @@ function initTestDatabase(): DatabaseType {
       new_value TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
+    `CREATE TABLE IF NOT EXISTS temperature_evidence (
+      id VARCHAR(36) PRIMARY KEY,
+      batch_id VARCHAR(64) NOT NULL,
+      source VARCHAR(30) NOT NULL CHECK (source IN ('driver_offline', 'csv_import', 'historical_backfill')),
+      reading_key VARCHAR(128) NOT NULL,
+      content_hash VARCHAR(64) NOT NULL,
+      raw_payload TEXT NOT NULL,
+      temperature_centi INTEGER NOT NULL,
+      observed_at DATETIME NOT NULL,
+      received_at DATETIME NOT NULL,
+      order_id VARCHAR(36) REFERENCES orders(id),
+      task_id VARCHAR(36) REFERENCES delivery_tasks(id),
+      node_id VARCHAR(36) REFERENCES delivery_nodes(id),
+      node_type VARCHAR(30) CHECK (node_type IN ('warehouse_in', 'loading', 'departure', 'arrival', 'delivery', 'signature')),
+      min_temp_centi INTEGER,
+      max_temp_centi INTEGER,
+      is_abnormal INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
   ];
 
   migrations.forEach(sql => db.exec(sql));
+
+  // 只追加账本的唯一约束与只追加触发器（与 V007/V008 迁移一致）。
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_reading_key ON temperature_evidence(reading_key)');
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_evidence_no_update
+    BEFORE UPDATE ON temperature_evidence
+    BEGIN
+      SELECT RAISE(ABORT, 'temperature_evidence 为只追加账本，禁止更新');
+    END
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_evidence_no_delete
+    BEFORE DELETE ON temperature_evidence
+    BEGIN
+      SELECT RAISE(ABORT, 'temperature_evidence 为只追加账本，禁止删除');
+    END
+  `);
 
   return db;
 }
@@ -196,6 +233,7 @@ function patchRepositories(db: DatabaseType): void {
   (exceptionHandlingRepository as any).db = db;
   (processingNoteRepository as any).db = db;
   (customerRepository as any).db = db;
+  (temperatureEvidenceRepository as any).db = db;
 }
 
 function createTestUser(): User {
@@ -307,6 +345,31 @@ function createTestNodes(taskId: string, userId: string, userName: string): Deli
 
 function setupFullTestData(): {
   user: User; order: Order; task: DeliveryTask; nodes: DeliveryNode[] } {
+  // 温度证据为只追加账本（含禁止 DELETE 触发器），测试隔离时重建该表。
+  testDb.exec('DROP TABLE IF EXISTS temperature_evidence');
+  testDb.exec(`CREATE TABLE temperature_evidence (
+    id VARCHAR(36) PRIMARY KEY,
+    batch_id VARCHAR(64) NOT NULL,
+    source VARCHAR(30) NOT NULL CHECK (source IN ('driver_offline', 'csv_import', 'historical_backfill')),
+    reading_key VARCHAR(128) NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    raw_payload TEXT NOT NULL,
+    temperature_centi INTEGER NOT NULL,
+    observed_at DATETIME NOT NULL,
+    received_at DATETIME NOT NULL,
+    order_id VARCHAR(36) REFERENCES orders(id),
+    task_id VARCHAR(36) REFERENCES delivery_tasks(id),
+    node_id VARCHAR(36) REFERENCES delivery_nodes(id),
+    node_type VARCHAR(30) CHECK (node_type IN ('warehouse_in', 'loading', 'departure', 'arrival', 'delivery', 'signature')),
+    min_temp_centi INTEGER,
+    max_temp_centi INTEGER,
+    is_abnormal INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  testDb.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_reading_key ON temperature_evidence(reading_key)');
+  testDb.exec(`CREATE TRIGGER IF NOT EXISTS trg_evidence_no_update BEFORE UPDATE ON temperature_evidence BEGIN SELECT RAISE(ABORT, '禁止更新'); END`);
+  testDb.exec(`CREATE TRIGGER IF NOT EXISTS trg_evidence_no_delete BEFORE DELETE ON temperature_evidence BEGIN SELECT RAISE(ABORT, '禁止删除'); END`);
+
   testDb.exec('DELETE FROM exception_processing_notes');
   testDb.exec('DELETE FROM exception_handlings');
   testDb.exec('DELETE FROM delivery_nodes');

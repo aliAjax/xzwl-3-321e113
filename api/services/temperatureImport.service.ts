@@ -1,8 +1,9 @@
 import { orderRepository } from '../repositories/order.repository';
 import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
-import { exceptionHandlingRepository } from '../repositories/exception.repository';
+import { temperatureEvidenceRepository } from '../repositories/temperatureEvidence.repository';
 import { deliveryService } from './delivery.service';
+import { temperatureEvidenceService } from './temperatureEvidence.service';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -17,11 +18,9 @@ import type {
   DeliveryTask,
   TemperatureRecordColumnMapping,
   TemperatureRecordColumnParseResult,
+  TemperatureRecordFieldKey,
 } from '../../shared/types';
 
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
 
 const nodeTypeMap: Record<string, NodeType> = {
   '入库': 'warehouse_in',
@@ -47,7 +46,7 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-const columnHeaderMatchers: Record<string, string[]> = {
+const columnHeaderMatchers: Record<TemperatureRecordFieldKey, string[]> = {
   orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
   nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
   recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
@@ -73,11 +72,13 @@ function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
 
   const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
 
-  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+  const fieldKeys = Object.keys(columnHeaderMatchers) as TemperatureRecordFieldKey[];
+  for (const field of fieldKeys) {
+    const patterns = columnHeaderMatchers[field];
     for (let i = 0; i < normalizedHeaders.length; i++) {
       const header = normalizedHeaders[i];
       if (patterns.some(pattern => header.includes(pattern))) {
-        (mapping as any)[field] = i;
+        mapping[field] = i;
         break;
       }
     }
@@ -418,6 +419,21 @@ function previewImport(csvText: string, mapping?: TemperatureRecordColumnMapping
   };
 }
 
+/**
+ * 将 parsed.recordedAt 归一化为 ISO 字符串。
+ * 服务层的 TemperatureRecordParsed.recordedAt 声明为 Date，但页面预览结果经 JSON
+ * 往返后会变成字符串（Date 无法序列化）。这里同时兼容 Date、字符串、时间戳，
+ * 避免在真实 HTTP 调用链上直接对字符串调用 .toISOString() 而抛错。
+ * 返回 null 表示无法解析成有效时间。
+ */
+function toIsoString(value: Date | string | number | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 function executeImport(
   records: TemperatureRecordValidationResult[],
   operator: User
@@ -427,6 +443,7 @@ function executeImport(
   let failedCount = 0;
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
+  let conflictCount = 0;
 
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
@@ -462,15 +479,76 @@ function executeImport(
     const { node, task, order } = matched;
 
     try {
-      if (record.status === 'importable') {
+      // 一致性：节点更新、温度证据登记、异常工单创建在同一事务内完成。
+      // - 账本冲突（同 readingKey 不同载荷）：抛出哨兵 → 回滚，节点不变、不建工单，判为冲突。
+      // - 事务内任一步骤失败：整体回滚，不会出现“节点已变、证据/工单缺失”的中间态。
+      const isAbnormal = record.status === 'abnormal';
+      const exceptionDesc = isAbnormal ? record.failureReasons.join('; ') : undefined;
+
+      // 兼容 JSON 往返后 recordedAt 变成字符串的情况，避免直接 .toISOString() 抛错。
+      const recordedAtIso = toIsoString(parsed.recordedAt);
+      if (!recordedAtIso) {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          message: '记录时间格式无效',
+        });
+        failedCount++;
+        continue;
+      }
+
+      const outcome = temperatureEvidenceRepository.runInTransaction((): { exceptionId?: string } => {
         nodeRepository.completeNode(node.id, {
           locationText: parsed.locationText,
           temperature: parsed.temperature!,
-          recordedAt: parsed.recordedAt!.toISOString(),
+          exceptionDescription: exceptionDesc,
+          recordedAt: recordedAtIso,
         });
 
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+        deliveryService.updateOrderStatusFromNode(
+          task.id,
+          node.nodeType,
+          isAbnormal ? 'exception' : 'completed'
+        );
 
+        // 账本统一负责“写证据 + 建/关联异常工单”。
+        const evidenceResult = temperatureEvidenceService.recordNodeEvidence({
+          source: 'csv_import',
+          orderId: order.id,
+          taskId: task.id,
+          nodeId: node.id,
+          nodeType: node.nodeType,
+          temperature: parsed.temperature!,
+          observedAt: recordedAtIso,
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName,
+          exceptionDescription: exceptionDesc,
+        });
+
+        if (evidenceResult.hasConflict) {
+          throw { kind: 'evidence_conflict' };
+        }
+
+        return { exceptionId: evidenceResult.outcomes[0]?.exceptionId };
+      });
+
+      if (isAbnormal) {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: true,
+          isException: true,
+          isSkipped: false,
+          nodeId: node.id,
+          exceptionId: outcome.exceptionId,
+          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
+        });
+        successCount++;
+        exceptionCreatedCount++;
+      } else {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -481,45 +559,23 @@ function executeImport(
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
         });
         successCount++;
-      } else if (record.status === 'abnormal') {
-        const exceptionDesc = record.failureReasons.join('; ');
-
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
-
-        const exceptionId = generateId();
-        exceptionHandlingRepository.createHandling({
-          id: exceptionId,
-          nodeId: node.id,
-          taskId: task.id,
-          orderId: order.id,
-          driverId: task.driverId,
-          temperatureZone: order.temperatureZone,
-          exceptionDescription: exceptionDesc,
-          exceptionTime: parsed.recordedAt!.toISOString(),
-          handlingStatus: 'pending',
-        });
-
+      }
+    } catch (error) {
+      const failure = error as { kind?: string };
+      if (failure && failure.kind === 'evidence_conflict') {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
-          success: true,
-          isException: true,
+          success: false,
+          isException: false,
           isSkipped: false,
+          isConflict: true,
           nodeId: node.id,
-          exceptionId,
-          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
+          message: `温度证据冲突：同一 readingKey 已存在不同载荷，拒绝覆盖（409）`,
         });
-        successCount++;
-        exceptionCreatedCount++;
+        conflictCount++;
+        continue;
       }
-    } catch (error) {
       results.push({
         lineNumber: record.lineNumber,
         orderNo: parsed.orderNo,
@@ -537,6 +593,7 @@ function executeImport(
     failedCount,
     skippedCount,
     exceptionCreatedCount,
+    conflictCount,
     results,
   };
 }

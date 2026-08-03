@@ -2,6 +2,8 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
+import { temperatureEvidenceService } from './temperatureEvidence.service';
+import { temperatureEvidenceRepository } from '../repositories/temperatureEvidence.repository';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -205,29 +207,88 @@ export const deliveryService = {
       };
     }
 
-    const updatedNode = nodeRepository.completeNode(nodeId, {
-      locationText: request.locationText,
-      temperature: request.temperature,
-      exceptionDescription: request.exceptionDescription,
-      clientSubmitId: request.clientSubmitId,
-      version: request.version,
-    });
+    // 一致性：节点更新（含乐观锁）与温度证据登记（含异常工单）在同一事务内完成。
+    // - 节点乐观锁冲突：抛出哨兵 → 整体回滚，证据不会残留。
+    // - 证据 readingKey 载荷冲突：抛出哨兵 → 整体回滚，节点不会被改动。
+    const observedAt = new Date().toISOString();
+    const hasTemperature = request.temperature !== undefined && request.temperature !== null;
+    const task = hasTemperature ? taskRepository.findById(node.taskId) : undefined;
 
-    if (request.version !== undefined && !updatedNode) {
-      const currentNode = nodeRepository.findById(nodeId);
-      return {
-        success: false,
-        conflict: {
-          type: 'concurrent_update',
-          message: '检测到并发更新，请刷新后重试',
-          currentNode: currentNode || node,
-          submittedData: request,
-        },
-      };
-    }
+    type TxnFailure =
+      | { kind: 'version_conflict' }
+      | { kind: 'evidence_conflict' };
 
-    if (updatedNode) {
-      this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
+    let updatedNode: DeliveryNode | undefined;
+    try {
+      updatedNode = temperatureEvidenceRepository.runInTransaction((): DeliveryNode | undefined => {
+        const written = nodeRepository.completeNode(nodeId, {
+          locationText: request.locationText,
+          temperature: request.temperature,
+          exceptionDescription: request.exceptionDescription,
+          clientSubmitId: request.clientSubmitId,
+          version: request.version,
+        });
+
+        // 乐观锁：带 version 但未更新任何行 → 版本冲突，回滚。
+        if (request.version !== undefined && !written) {
+          const failure: TxnFailure = { kind: 'version_conflict' };
+          throw failure;
+        }
+
+        if (written && hasTemperature && task) {
+          const evidenceResult = temperatureEvidenceService.recordNodeEvidence({
+            source: 'driver_offline',
+            orderId: task.orderId,
+            taskId: task.id,
+            nodeId: written.id,
+            nodeType: written.nodeType,
+            temperature: request.temperature as number,
+            observedAt,
+            locationText: request.locationText,
+            operatorName: operator.name,
+            exceptionDescription: request.exceptionDescription,
+          });
+
+          if (evidenceResult.hasConflict) {
+            const failure: TxnFailure = { kind: 'evidence_conflict' };
+            throw failure;
+          }
+        }
+
+        // 状态传播（任务/订单）也纳入同一事务：若传播抛错则整体回滚，
+        // 不会留下“节点已完成、证据已写、但任务/订单仍为旧状态”的跨表不一致。
+        if (written) {
+          this.updateOrderStatusFromNode(node.taskId, node.nodeType, written.status);
+        }
+
+        return written;
+      });
+    } catch (error) {
+      const failure = error as TxnFailure;
+      if (failure && failure.kind === 'version_conflict') {
+        const currentNode = nodeRepository.findById(nodeId);
+        return {
+          success: false,
+          conflict: {
+            type: 'concurrent_update',
+            message: '检测到并发更新，请刷新后重试',
+            currentNode: currentNode || node,
+            submittedData: request,
+          },
+        };
+      }
+      if (failure && failure.kind === 'evidence_conflict') {
+        return {
+          success: false,
+          conflict: {
+            type: 'evidence_conflict',
+            message: '温度证据冲突：同一 readingKey 已存在不同载荷，拒绝覆盖',
+            currentNode: node,
+            submittedData: request,
+          },
+        };
+      }
+      throw error;
     }
 
     return {

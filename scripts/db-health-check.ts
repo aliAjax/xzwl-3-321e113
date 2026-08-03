@@ -66,6 +66,10 @@ const expectedSchema: TableSchema[] = [
     columns: ['id', 'exception_handling_id', 'note', 'created_by', 'created_by_name', 'action_type', 'old_value', 'new_value', 'created_at'],
   },
   {
+    name: 'temperature_evidence',
+    columns: ['id', 'batch_id', 'source', 'reading_key', 'content_hash', 'raw_payload', 'temperature_centi', 'observed_at', 'received_at', 'order_id', 'task_id', 'node_id', 'node_type', 'min_temp_centi', 'max_temp_centi', 'is_abnormal', 'created_at'],
+  },
+  {
     name: 'schema_migrations',
     columns: ['id', 'name', 'executed_at', 'success', 'error_message'],
   },
