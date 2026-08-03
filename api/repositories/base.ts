@@ -168,4 +168,9 @@ export abstract class BaseRepository<T extends { id: string }> {
       .get(id) as { record_exists: number } | undefined;
     return row?.record_exists === 1;
   }
+
+  /** 在当前仓库连接上执行事务，保证多表写入与调用方使用同一数据库连接 */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
 }

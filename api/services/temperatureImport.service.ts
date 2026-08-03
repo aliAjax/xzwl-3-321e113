@@ -3,6 +3,7 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import { temperatureEvidenceService } from './temperatureEvidence.service';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -11,6 +12,7 @@ import type {
   TemperatureRecordImportPreview,
   TemperatureRecordImportResult,
   TemperatureRecordStatus,
+  TemperatureRecordFieldKey,
   User,
   DeliveryNode,
   Order,
@@ -47,7 +49,7 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-const columnHeaderMatchers: Record<string, string[]> = {
+const columnHeaderMatchers: Record<TemperatureRecordFieldKey, string[]> = {
   orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
   nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
   recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
@@ -73,11 +75,13 @@ function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
 
   const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
 
-  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+  const fieldKeys = Object.keys(columnHeaderMatchers) as TemperatureRecordFieldKey[];
+  for (const field of fieldKeys) {
+    const patterns = columnHeaderMatchers[field];
     for (let i = 0; i < normalizedHeaders.length; i++) {
       const header = normalizedHeaders[i];
       if (patterns.some(pattern => header.includes(pattern))) {
-        (mapping as any)[field] = i;
+        mapping[field] = i;
         break;
       }
     }
@@ -428,6 +432,9 @@ function executeImport(
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
 
+  // 本次导入对应一个证据批次，便于审计与按批查询
+  const importBatchId = `csv-import-${generateId()}`;
+
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
     results.push({
@@ -461,15 +468,42 @@ function executeImport(
 
     const { node, task, order } = matched;
 
+    // 温度证据落账是导入成功的组成部分：严格写入，失败即抛错
+    const appendCsvEvidence = (): void => {
+      temperatureEvidenceService.appendEvidenceStrict({
+        source: 'csv_import',
+        readingKey: `csv:${node.id}:${parsed.recordedAt!.toISOString()}`,
+        nodeId: node.id,
+        batchId: importBatchId,
+        temperature: parsed.temperature!,
+        observedAt: parsed.recordedAt!.toISOString(),
+        rawPayload: {
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          nodeType: node.nodeType,
+          recordedAt: parsed.recordedAt!.toISOString(),
+          temperature: parsed.temperature!,
+          locationText: parsed.locationText,
+          operatorName: parsed.operatorName,
+          importedBy: operator.username,
+        },
+      });
+    };
+
     try {
       if (record.status === 'importable') {
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
+        // 节点完成、状态推进与证据落账同事务：落账失败整体回滚，计为导入失败。
+        // 事务经由 nodeRepository 当前连接执行，保证与仓库使用同一数据库。
+        nodeRepository.transaction(() => {
+          nodeRepository.completeNode(node.id, {
+            locationText: parsed.locationText,
+            temperature: parsed.temperature!,
+            recordedAt: parsed.recordedAt!.toISOString(),
+          });
 
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+          deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+          appendCsvEvidence();
+        });
 
         results.push({
           lineNumber: record.lineNumber,
@@ -483,27 +517,31 @@ function executeImport(
         successCount++;
       } else if (record.status === 'abnormal') {
         const exceptionDesc = record.failureReasons.join('; ');
-
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
-
         const exceptionId = generateId();
-        exceptionHandlingRepository.createHandling({
-          id: exceptionId,
-          nodeId: node.id,
-          taskId: task.id,
-          orderId: order.id,
-          driverId: task.driverId,
-          temperatureZone: order.temperatureZone,
-          exceptionDescription: exceptionDesc,
-          exceptionTime: parsed.recordedAt!.toISOString(),
-          handlingStatus: 'pending',
+
+        // 节点完成、异常工单与证据落账同事务：任一步骤失败整体回滚，计为导入失败
+        nodeRepository.transaction(() => {
+          nodeRepository.completeNode(node.id, {
+            locationText: parsed.locationText,
+            temperature: parsed.temperature!,
+            exceptionDescription: exceptionDesc,
+            recordedAt: parsed.recordedAt!.toISOString(),
+          });
+
+          deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
+          appendCsvEvidence();
+
+          exceptionHandlingRepository.createHandling({
+            id: exceptionId,
+            nodeId: node.id,
+            taskId: task.id,
+            orderId: order.id,
+            driverId: task.driverId,
+            temperatureZone: order.temperatureZone,
+            exceptionDescription: exceptionDesc,
+            exceptionTime: parsed.recordedAt!.toISOString(),
+            handlingStatus: 'pending',
+          });
         });
 
         results.push({
