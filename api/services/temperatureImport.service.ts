@@ -3,6 +3,8 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import { temperatureLedgerService } from './temperature-ledger.service';
+import { LedgerConflictError } from '../../shared/temperature-ledger.types';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -21,6 +23,20 @@ import type {
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+function toIsoString(value: Date | string | null | undefined): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+    return value.trim();
+  }
+  throw new Error('记录时间无效');
 }
 
 const nodeTypeMap: Record<string, NodeType> = {
@@ -462,15 +478,64 @@ function executeImport(
     const { node, task, order } = matched;
 
     try {
-      if (record.status === 'importable') {
-        nodeRepository.completeNode(node.id, {
+      const observedAtIso = toIsoString(parsed.recordedAt);
+      const temperature = parsed.temperature!;
+      const readingKey = `csv:${order.orderNo}:${node.nodeType}:${observedAtIso}`;
+      const rawPayload: Record<string, unknown> = {
+        orderNo: parsed.orderNo,
+        nodeType: node.nodeType,
+        recordedAt: observedAtIso,
+        temperature,
+        locationText: parsed.locationText || null,
+        operatorName: parsed.operatorName || null,
+        lineNumber: record.lineNumber,
+        importedBy: operator.id,
+      };
+
+      let ledgerOutcome: { status: 'created' | 'idempotent' | 'conflict'; message?: string } = { status: 'created' };
+      try {
+        const outcome = temperatureLedgerService.recordForNode({
+          source: 'csv_import',
+          readingKey,
+          rawPayload,
+          nodeId: node.id,
+          taskId: task.id,
+          orderId: order.id,
+          nodeType: node.nodeType,
+          orderNo: order.orderNo,
+          temperatureCelsius: temperature,
+          observedAt: observedAtIso,
           locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          recordedAt: parsed.recordedAt!.toISOString(),
+          operatorName: parsed.operatorName || operator.name,
         });
+        if (outcome.status === 'conflict') {
+          ledgerOutcome = { status: 'conflict', message: outcome.message };
+        } else if (outcome.status === 'idempotent') {
+          ledgerOutcome = { status: 'idempotent' };
+        }
+      } catch (ledgerError) {
+        if (ledgerError instanceof LedgerConflictError) {
+          ledgerOutcome = { status: 'conflict', message: ledgerError.message };
+        } else {
+          throw ledgerError;
+        }
+      }
 
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+      if (ledgerOutcome.status === 'conflict') {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          nodeId: node.id,
+          message: `证据冲突: ${ledgerOutcome.message}`,
+        });
+        failedCount++;
+        continue;
+      }
 
+      if (record.status === 'importable') {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -478,33 +543,30 @@ function executeImport(
           isException: false,
           isSkipped: false,
           nodeId: node.id,
-          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
+          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功${ledgerOutcome.status === 'idempotent' ? '（证据幂等）' : ''}`,
         });
         successCount++;
       } else if (record.status === 'abnormal') {
         const exceptionDesc = record.failureReasons.join('; ');
 
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
-
-        const exceptionId = generateId();
-        exceptionHandlingRepository.createHandling({
-          id: exceptionId,
-          nodeId: node.id,
-          taskId: task.id,
-          orderId: order.id,
-          driverId: task.driverId,
-          temperatureZone: order.temperatureZone,
-          exceptionDescription: exceptionDesc,
-          exceptionTime: parsed.recordedAt!.toISOString(),
-          handlingStatus: 'pending',
-        });
+        let exceptionId: string | undefined;
+        const existingHandling = exceptionHandlingRepository.findByNodeId(node.id);
+        if (existingHandling) {
+          exceptionId = existingHandling.id;
+        } else {
+          exceptionId = generateId();
+          exceptionHandlingRepository.createHandling({
+            id: exceptionId,
+            nodeId: node.id,
+            taskId: task.id,
+            orderId: order.id,
+            driverId: task.driverId,
+            temperatureZone: order.temperatureZone,
+            exceptionDescription: exceptionDesc,
+            exceptionTime: observedAtIso,
+            handlingStatus: 'pending',
+          });
+        }
 
         results.push({
           lineNumber: record.lineNumber,
@@ -514,10 +576,12 @@ function executeImport(
           isSkipped: false,
           nodeId: node.id,
           exceptionId,
-          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
+          message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录${ledgerOutcome.status === 'idempotent' ? '（证据幂等）' : ''}`,
         });
         successCount++;
-        exceptionCreatedCount++;
+        if (!existingHandling) {
+          exceptionCreatedCount++;
+        }
       }
     } catch (error) {
       results.push({
