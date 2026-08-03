@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import { temperatureImportService } from '../services/temperatureImport.service';
 import type {
   TemperatureRecordImportRequest,
-  TemperatureRecordValidationResult,
   User,
   TemperatureRecordColumnMapping,
 } from '../../shared/types';
@@ -40,7 +39,7 @@ export const temperatureImportController = {
 
   async confirmImport(req: Request, res: Response): Promise<Response> {
     try {
-      const operator = (req as any).user as User;
+      const operator = req.user as User | undefined;
       if (!operator) {
         return res.status(401).json({ message: '未授权，请先登录' });
       }
@@ -51,13 +50,27 @@ export const temperatureImportController = {
         return res.status(400).json({ message: '导入记录不能为空' });
       }
 
-      const result = temperatureImportService.executeImport(records as TemperatureRecordValidationResult[], operator);
+      const result = temperatureImportService.executeImport(records, operator);
+
+      if (result.conflictCount > 0) {
+        return res.status(409).json({
+          message: '导入存在证据冲突',
+          successCount: result.successCount,
+          failedCount: result.failedCount,
+          skippedCount: result.skippedCount,
+          exceptionCreatedCount: result.exceptionCreatedCount,
+          conflictCount: result.conflictCount,
+          results: result.results,
+        });
+      }
+
       return res.status(200).json({
         message: '导入完成',
         successCount: result.successCount,
         failedCount: result.failedCount,
         skippedCount: result.skippedCount,
         exceptionCreatedCount: result.exceptionCreatedCount,
+        conflictCount: result.conflictCount,
         results: result.results,
       });
     } catch (error) {

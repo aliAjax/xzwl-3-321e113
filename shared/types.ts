@@ -1,7 +1,7 @@
 export type TemperatureZone = 'frozen' | 'chilled' | 'ambient';
 export type OrderStatus = 'created' | 'warehoused' | 'loading' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
 export type SyncStatus = 'synced' | 'syncing' | 'pending' | 'failed' | 'conflict';
-export type ConflictType = 'already_completed' | 'updated_by_other' | 'concurrent_update';
+export type ConflictType = 'already_completed' | 'updated_by_other' | 'concurrent_update' | 'evidence_conflict';
 
 export const TEMPERATURE_ZONE_RANGES: Record<TemperatureZone, { min: number; max: number; label: string }> = {
   frozen: { min: -30, max: -10, label: '冷冻' },
@@ -306,6 +306,11 @@ export interface NodeUpdateResponse {
     message: string;
     currentNode: DeliveryNode;
     submittedData: NodeUpdateRequest;
+  };
+  evidenceConflict?: {
+    readingKey: string;
+    existingEvidenceId: string;
+    message: string;
   };
 }
 
@@ -729,14 +734,18 @@ export interface TemperatureRecordImportResult {
   failedCount: number;
   skippedCount: number;
   exceptionCreatedCount: number;
+  conflictCount: number;
   results: Array<{
     lineNumber: number;
     orderNo: string;
     success: boolean;
     isException: boolean;
     isSkipped: boolean;
+    isConflict?: boolean;
     nodeId?: string;
     exceptionId?: string;
+    evidenceId?: string;
+    readingKey?: string;
     message: string;
   }>;
 }
@@ -812,4 +821,138 @@ export interface DispatchSandboxApplyRequest {
   driverId: string;
   routeId: string;
   scheduledDepartureTime: string;
+}
+
+export type TemperatureEvidenceSource = 'csv_import' | 'driver_offline' | 'historical_backfill';
+
+export const TEMPERATURE_EVIDENCE_SOURCE_PRIORITY: Record<TemperatureEvidenceSource, number> = {
+  driver_offline: 1,
+  csv_import: 2,
+  historical_backfill: 3,
+};
+
+export interface TemperatureEvidence {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  originalPayload: string;
+  normalizedTempC: number;
+  observedAt: string;
+  receivedAt: string;
+  locationText: string;
+  operatorName: string;
+  payloadHash: string;
+  isAbnormal: boolean;
+  createdAt: string;
+}
+
+export interface TemperatureEvidenceItem {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  temperatureCelsius: number;
+  normalizedTempC: number;
+  observedAt: string;
+  receivedAt: string;
+  locationText: string;
+  operatorName: string;
+  isAbnormal: boolean;
+  createdAt: string;
+}
+
+export interface TemperatureEvidenceSubmitRecord {
+  readingKey: string;
+  nodeId: string;
+  temperatureC: number;
+  observedAt: string;
+  locationText?: string;
+  operatorName?: string;
+  originalPayload?: Record<string, unknown>;
+}
+
+export interface TemperatureEvidenceDriverSubmitRequest {
+  records: TemperatureEvidenceSubmitRecord[];
+}
+
+export interface TemperatureEvidenceBackfillRequest {
+  records: TemperatureEvidenceSubmitRecord[];
+}
+
+export interface TemperatureEvidenceSubmitResultItem {
+  readingKey: string;
+  status: 'created' | 'duplicate' | 'conflict' | 'error';
+  evidenceId?: string;
+  message: string;
+}
+
+export interface TemperatureEvidenceSubmitResponse {
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  totalCount: number;
+  createdCount: number;
+  duplicateCount: number;
+  conflictCount: number;
+  errorCount: number;
+  results: TemperatureEvidenceSubmitResultItem[];
+}
+
+export interface TemperatureEvidenceTimelineEntry {
+  id: string;
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  readingKey: string;
+  nodeId: string;
+  taskId: string;
+  orderId: string;
+  temperatureCelsius: number;
+  normalizedTempC: number;
+  observedAt: string;
+  receivedAt: string;
+  locationText: string;
+  operatorName: string;
+  isAbnormal: boolean;
+  isAnomalous: boolean;
+  sourcePriority: number;
+  createdAt: string;
+}
+
+export interface TemperatureEvidenceNodeSummary {
+  nodeId: string;
+  totalEvidenceCount: number;
+  abnormalCount: number;
+  latestObservedAt?: string;
+  hasAnomaly: boolean;
+  anomalousEvidence: TemperatureEvidenceItem[];
+}
+
+export interface TemperatureEvidenceBatchSummary {
+  batchId: string;
+  source: TemperatureEvidenceSource;
+  totalCount: number;
+  createdCount: number;
+  duplicateCount: number;
+  conflictCount: number;
+  errorCount: number;
+  receivedAt: string;
+}
+
+export interface TemperatureEvidenceListResponse {
+  items: TemperatureEvidenceItem[];
+  total: number;
+}
+
+export interface TemperatureEvidenceTimelineResponse {
+  taskId: string;
+  entries: TemperatureEvidenceTimelineEntry[];
+  hasAnomaly: boolean;
+  totalCount: number;
+  abnormalCount: number;
 }

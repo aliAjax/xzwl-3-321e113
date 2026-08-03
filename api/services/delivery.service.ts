@@ -2,6 +2,9 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { orderRepository } from '../repositories/order.repository';
 import { batchRepository } from '../repositories/batch.repository';
+import db from '../db/index.js';
+import { temperatureEvidenceService } from './temperatureEvidence/index.js';
+import { hasTimezoneInfo } from './temperatureEvidence/index.js';
 import type {
   DeliveryTask,
   DeliveryNode,
@@ -12,6 +15,22 @@ import type {
   NodeUpdateResponse,
   User,
 } from '../../shared/types';
+
+class ConcurrentUpdateError extends Error {
+  constructor() {
+    super('concurrent_update');
+    this.name = 'ConcurrentUpdateError';
+  }
+}
+
+class EvidenceConflictError extends Error {
+  readonly readingKey: string;
+  constructor(readingKey: string) {
+    super('相同 readingKey 但载荷不同，冲突 (409)，禁止覆盖');
+    this.name = 'EvidenceConflictError';
+    this.readingKey = readingKey;
+  }
+}
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -205,35 +224,170 @@ export const deliveryService = {
       };
     }
 
-    const updatedNode = nodeRepository.completeNode(nodeId, {
-      locationText: request.locationText,
-      temperature: request.temperature,
-      exceptionDescription: request.exceptionDescription,
-      clientSubmitId: request.clientSubmitId,
-      version: request.version,
-    });
+    const isDriverSubmission = operator.role === 'driver';
 
-    if (request.version !== undefined && !updatedNode) {
-      const currentNode = nodeRepository.findById(nodeId);
-      return {
-        success: false,
-        conflict: {
-          type: 'concurrent_update',
-          message: '检测到并发更新，请刷新后重试',
-          currentNode: currentNode || node,
-          submittedData: request,
+    let preparedEvidence: { data: Parameters<typeof temperatureEvidenceService.appendPrepared>[0]; readingKey: string } | null = null;
+
+    if (request.temperature !== undefined) {
+      const readingKey = request.clientSubmitId
+        ? `driver:${request.clientSubmitId}`
+        : `driver:${nodeId}:${Date.now()}`;
+
+      let observedAt: string;
+      if (request.updatedAt && hasTimezoneInfo(request.updatedAt)) {
+        observedAt = request.updatedAt;
+      } else if (isDriverSubmission) {
+        return {
+          success: false,
+          conflict: {
+            type: 'evidence_conflict',
+            message: '司机上报数据必须包含时区信息（如 Z 或 +08:00）',
+            currentNode: node,
+            submittedData: request,
+          },
+        };
+      } else {
+        observedAt = new Date().toISOString();
+      }
+
+      const prepared = temperatureEvidenceService.prepareSubmission({
+        readingKey,
+        nodeId,
+        temperatureC: request.temperature,
+        observedAt,
+        locationText: request.locationText,
+        operatorName: operator.name,
+        originalPayload: {
+          source: 'driver_offline',
+          nodeId,
+          taskId: node.taskId,
+          status: request.status,
+          temperature: request.temperature,
+          clientSubmitId: request.clientSubmitId,
+          exceptionDescription: request.exceptionDescription,
+          submittedUpdatedAt: request.updatedAt,
         },
+      }, {
+        source: 'driver_offline',
+        requireTimezone: isDriverSubmission,
+      });
+
+      if (prepared.kind === 'result') {
+        const result = prepared.result;
+        if (result.status === 'conflict') {
+          return {
+            success: false,
+            conflict: {
+              type: 'evidence_conflict',
+              message: `温度证据冲突: ${result.message}`,
+              currentNode: node,
+              submittedData: request,
+            },
+            evidenceConflict: {
+              readingKey,
+              existingEvidenceId: result.evidenceId || '',
+              message: result.message,
+            },
+          };
+        }
+        if (result.status === 'error') {
+          return {
+            success: false,
+            conflict: {
+              type: 'evidence_conflict',
+              message: `温度证据写入失败: ${result.message}`,
+              currentNode: node,
+              submittedData: request,
+            },
+          };
+        }
+      } else {
+        preparedEvidence = { data: prepared.data, readingKey: prepared.readingKey };
+      }
+    }
+
+    try {
+      const updatedNode = db.transaction((): DeliveryNode | undefined => {
+        if (preparedEvidence) {
+          try {
+            temperatureEvidenceService.appendPrepared(preparedEvidence.data);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (msg.includes('UNIQUE') || msg.includes('reading_key')) {
+              const checkResult = temperatureEvidenceService.prepareSubmission({
+                readingKey: preparedEvidence.readingKey,
+                nodeId,
+                temperatureC: request.temperature!,
+                observedAt: preparedEvidence.data.observedAt,
+                locationText: request.locationText,
+                operatorName: operator.name,
+              }, { source: 'driver_offline', requireTimezone: false });
+
+              if (checkResult.kind === 'result' && checkResult.result.status === 'duplicate') {
+                // idempotent - same evidence already exists, continue
+              } else {
+                throw new EvidenceConflictError(preparedEvidence.readingKey);
+              }
+            } else {
+              throw e;
+            }
+          }
+        }
+
+        const updated = nodeRepository.completeNode(nodeId, {
+          locationText: request.locationText,
+          temperature: request.temperature,
+          exceptionDescription: request.exceptionDescription,
+          clientSubmitId: request.clientSubmitId,
+          version: request.version,
+        });
+
+        if (request.version !== undefined && !updated) {
+          throw new ConcurrentUpdateError();
+        }
+
+        if (updated) {
+          this.updateOrderStatusFromNode(node.taskId, node.nodeType, updated.status);
+        }
+
+        return updated;
+      })();
+
+      return {
+        success: true,
+        node: updatedNode,
       };
+    } catch (e) {
+      if (e instanceof ConcurrentUpdateError) {
+        const currentNode = nodeRepository.findById(nodeId);
+        return {
+          success: false,
+          conflict: {
+            type: 'concurrent_update',
+            message: '检测到并发更新，请刷新后重试',
+            currentNode: currentNode || node,
+            submittedData: request,
+          },
+        };
+      }
+      if (e instanceof EvidenceConflictError) {
+        return {
+          success: false,
+          conflict: {
+            type: 'evidence_conflict',
+            message: `温度证据冲突: ${e.message}`,
+            currentNode: node,
+            submittedData: request,
+          },
+          evidenceConflict: {
+            readingKey: e.readingKey,
+            existingEvidenceId: '',
+            message: e.message,
+          },
+        };
+      }
+      throw e;
     }
-
-    if (updatedNode) {
-      this.updateOrderStatusFromNode(node.taskId, node.nodeType, updatedNode.status);
-    }
-
-    return {
-      success: true,
-      node: updatedNode,
-    };
   },
 
   startNode(nodeId: string, operator: User): DeliveryNode | undefined {

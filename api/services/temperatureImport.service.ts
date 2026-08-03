@@ -3,6 +3,9 @@ import { taskRepository } from '../repositories/task.repository';
 import { nodeRepository } from '../repositories/node.repository';
 import { exceptionHandlingRepository } from '../repositories/exception.repository';
 import { deliveryService } from './delivery.service';
+import db from '../db/index.js';
+import { temperatureEvidenceService } from './temperatureEvidence/index.js';
+import { parseObservedAt, parseTemperatureString, DEFAULT_CSV_OFFSET_MINUTES } from './temperatureEvidence/index.js';
 import type {
   NodeType,
   TemperatureRecordCsvRow,
@@ -17,6 +20,7 @@ import type {
   DeliveryTask,
   TemperatureRecordColumnMapping,
   TemperatureRecordColumnParseResult,
+  TemperatureRecordFieldKey,
 } from '../../shared/types';
 
 function generateId(): string {
@@ -47,7 +51,7 @@ const nodeTypeNames: Record<NodeType, string> = {
   signature: '签收',
 };
 
-const columnHeaderMatchers: Record<string, string[]> = {
+const columnHeaderMatchers: Record<TemperatureRecordFieldKey, string[]> = {
   orderNo: ['订单号', 'orderno', 'order no', 'order_id', 'orderid', '订单编号'],
   nodeType: ['节点类型', 'nodetype', 'node type', '节点', '操作类型', '环节'],
   recordedAt: ['记录时间', 'recordedat', 'recorded at', '时间', '日期', 'datetime', 'date', '发生时间'],
@@ -72,12 +76,14 @@ function autoDetectMapping(headers: string[]): TemperatureRecordColumnMapping {
   };
 
   const normalizedHeaders = headers.map(h => h.trim().toLowerCase());
+  const fieldKeys: TemperatureRecordFieldKey[] = ['orderNo', 'nodeType', 'recordedAt', 'temperature', 'locationText', 'operatorName'];
 
-  for (const [field, patterns] of Object.entries(columnHeaderMatchers)) {
+  for (const field of fieldKeys) {
+    const patterns = columnHeaderMatchers[field];
     for (let i = 0; i < normalizedHeaders.length; i++) {
       const header = normalizedHeaders[i];
       if (patterns.some(pattern => header.includes(pattern))) {
-        (mapping as any)[field] = i;
+        mapping[field] = i;
         break;
       }
     }
@@ -183,43 +189,24 @@ function parseRow(row: TemperatureRecordCsvRow, lineNumber: number): Temperature
   let recordedAt: Date | null = null;
   const dateStr = (row.recordedAt || '').trim();
   if (dateStr) {
-    const parsedDate = new Date(dateStr);
-    if (!isNaN(parsedDate.getTime())) {
-      recordedAt = parsedDate;
-    } else {
-      const formats = [
-        /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/,
-        /^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/,
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/,
-        /^(\d{4})年(\d{2})月(\d{2})日\s*(\d{2})?:?(\d{2})?:?(\d{2})?$/,
-      ];
-      for (const regex of formats) {
-        const match = dateStr.match(regex);
-        if (match) {
-          const [, y, m, d, h = '0', min = '0', s = '0'] = match;
-          const constructedDate = new Date(
-            parseInt(y),
-            parseInt(m) - 1,
-            parseInt(d),
-            parseInt(h),
-            parseInt(min),
-            parseInt(s)
-          );
-          if (!isNaN(constructedDate.getTime())) {
-            recordedAt = constructedDate;
-            break;
-          }
-        }
-      }
+    try {
+      recordedAt = parseObservedAt(dateStr, {
+        requireTimezone: false,
+        defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
+      });
+    } catch {
+      recordedAt = null;
     }
   }
 
   let temperature: number | null = null;
   const tempStr = (row.temperature || '').trim();
   if (tempStr) {
-    const parsedTemp = parseFloat(tempStr);
-    if (!isNaN(parsedTemp)) {
-      temperature = parsedTemp;
+    try {
+      const parsed = parseTemperatureString(tempStr);
+      temperature = parsed.valueCelsius;
+    } catch {
+      temperature = null;
     }
   }
 
@@ -418,6 +405,14 @@ function previewImport(csvText: string, mapping?: TemperatureRecordColumnMapping
   };
 }
 
+function buildCsvReadingKey(
+  orderNo: string,
+  nodeType: NodeType,
+  observedAt: Date
+): string {
+  return `csv:${orderNo}:${nodeType}:${observedAt.toISOString()}`;
+}
+
 function executeImport(
   records: TemperatureRecordValidationResult[],
   operator: User
@@ -427,6 +422,7 @@ function executeImport(
   let failedCount = 0;
   let skippedCount = 0;
   let exceptionCreatedCount = 0;
+  let conflictCount = 0;
 
   const skippedRecords = records.filter(r => r.status === 'unmatched');
   for (const record of skippedRecords) {
@@ -461,16 +457,75 @@ function executeImport(
 
     const { node, task, order } = matched;
 
-    try {
-      if (record.status === 'importable') {
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          recordedAt: parsed.recordedAt!.toISOString(),
+    if (parsed.temperature === null || !parsed.recordedAt) {
+      results.push({
+        lineNumber: record.lineNumber,
+        orderNo: parsed.orderNo,
+        success: false,
+        isException: false,
+        isSkipped: false,
+        message: '温度或时间数据无效',
+      });
+      failedCount++;
+      continue;
+    }
+
+    const tempValue: number = parsed.temperature;
+    const observedAtIso = parsed.recordedAt.toISOString();
+    const readingKey = buildCsvReadingKey(parsed.orderNo, node.nodeType, parsed.recordedAt);
+
+    const prepared = temperatureEvidenceService.prepareSubmission({
+      readingKey,
+      nodeId: node.id,
+      temperatureC: tempValue,
+      observedAt: observedAtIso,
+      locationText: parsed.locationText,
+      operatorName: parsed.operatorName || operator.name,
+      originalPayload: {
+        source: 'csv_import',
+        lineNumber: record.lineNumber,
+        orderNo: parsed.orderNo,
+        nodeType: node.nodeType,
+        temperature: tempValue,
+        recordedAt: observedAtIso,
+        locationText: parsed.locationText,
+        operatorName: parsed.operatorName,
+        failureReasons: record.failureReasons,
+      },
+    }, {
+      source: 'csv_import',
+      requireTimezone: false,
+      defaultOffsetMinutes: DEFAULT_CSV_OFFSET_MINUTES,
+    });
+
+    if (prepared.kind === 'result') {
+      if (prepared.result.status === 'conflict') {
+        conflictCount++;
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          isConflict: true,
+          nodeId: node.id,
+          evidenceId: prepared.result.evidenceId,
+          readingKey,
+          message: `证据冲突: ${prepared.result.message}`,
         });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
-
+      } else if (prepared.result.status === 'error') {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: false,
+          isException: false,
+          isSkipped: false,
+          nodeId: node.id,
+          readingKey,
+          message: `证据写入失败: ${prepared.result.message}`,
+        });
+        failedCount++;
+      } else {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -478,34 +533,71 @@ function executeImport(
           isException: false,
           isSkipped: false,
           nodeId: node.id,
+          evidenceId: prepared.result.evidenceId,
+          readingKey,
+          message: '证据已存在（幂等）',
+        });
+        successCount++;
+      }
+      continue;
+    }
+
+    try {
+      const txResult = db.transaction((): { exceptionId?: string } => {
+        temperatureEvidenceService.appendPrepared(prepared.data);
+
+        if (record.status === 'importable') {
+          nodeRepository.completeNode(node.id, {
+            locationText: parsed.locationText,
+            temperature: tempValue,
+            recordedAt: observedAtIso,
+          });
+
+          deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'completed');
+          return {};
+        } else {
+          const exceptionDesc = record.failureReasons.join('; ');
+
+          nodeRepository.completeNode(node.id, {
+            locationText: parsed.locationText,
+            temperature: tempValue,
+            exceptionDescription: exceptionDesc,
+            recordedAt: observedAtIso,
+          });
+
+          deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
+
+          const exceptionId = generateId();
+          exceptionHandlingRepository.createHandling({
+            id: exceptionId,
+            nodeId: node.id,
+            taskId: task.id,
+            orderId: order.id,
+            driverId: task.driverId,
+            temperatureZone: order.temperatureZone,
+            exceptionDescription: exceptionDesc,
+            exceptionTime: observedAtIso,
+            handlingStatus: 'pending',
+          });
+
+          return { exceptionId };
+        }
+      })();
+
+      if (record.status === 'importable') {
+        results.push({
+          lineNumber: record.lineNumber,
+          orderNo: parsed.orderNo,
+          success: true,
+          isException: false,
+          isSkipped: false,
+          nodeId: node.id,
+          evidenceId: prepared.data.id,
+          readingKey,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功`,
         });
         successCount++;
-      } else if (record.status === 'abnormal') {
-        const exceptionDesc = record.failureReasons.join('; ');
-
-        nodeRepository.completeNode(node.id, {
-          locationText: parsed.locationText,
-          temperature: parsed.temperature!,
-          exceptionDescription: exceptionDesc,
-          recordedAt: parsed.recordedAt!.toISOString(),
-        });
-
-        deliveryService.updateOrderStatusFromNode(task.id, node.nodeType, 'exception');
-
-        const exceptionId = generateId();
-        exceptionHandlingRepository.createHandling({
-          id: exceptionId,
-          nodeId: node.id,
-          taskId: task.id,
-          orderId: order.id,
-          driverId: task.driverId,
-          temperatureZone: order.temperatureZone,
-          exceptionDescription: exceptionDesc,
-          exceptionTime: parsed.recordedAt!.toISOString(),
-          handlingStatus: 'pending',
-        });
-
+      } else {
         results.push({
           lineNumber: record.lineNumber,
           orderNo: parsed.orderNo,
@@ -513,7 +605,9 @@ function executeImport(
           isException: true,
           isSkipped: false,
           nodeId: node.id,
-          exceptionId,
+          exceptionId: txResult.exceptionId,
+          evidenceId: prepared.data.id,
+          readingKey,
           message: `节点 ${nodeTypeNames[node.nodeType]} 导入成功（温度异常），已创建异常记录`,
         });
         successCount++;
@@ -526,6 +620,8 @@ function executeImport(
         success: false,
         isException: false,
         isSkipped: false,
+        nodeId: node.id,
+        readingKey,
         message: `导入失败: ${error instanceof Error ? error.message : '未知错误'}`,
       });
       failedCount++;
@@ -537,6 +633,7 @@ function executeImport(
     failedCount,
     skippedCount,
     exceptionCreatedCount,
+    conflictCount,
     results,
   };
 }

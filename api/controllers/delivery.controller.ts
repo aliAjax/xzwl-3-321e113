@@ -184,6 +184,7 @@ export const deliveryController = {
         return res.status(409).json({
           success: false,
           conflict: result.conflict,
+          evidenceConflict: result.evidenceConflict,
           message: result.conflict.message,
         });
       }
